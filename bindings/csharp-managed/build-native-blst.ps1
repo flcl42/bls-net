@@ -39,6 +39,12 @@ try {
     Remove-Item -LiteralPath "server.o", "assembly.o", "libblst.a", "blst.dll" -Force -ErrorAction SilentlyContinue
 
     $cflags = @("-O2", "-fno-builtin", "-fPIC", "-Wall", "-Wextra", "-Werror")
+
+    # Like build.sh, use the MULX/ADCX/ADOX code paths when the build machine supports ADX.
+    if (("" | & $gcc -march=native -dM -E -x c -) -match "^#define __ADX__ ") {
+        $cflags = @("-D__ADX__") + $cflags
+    }
+
     & $gcc @cflags "-D__BLST_DLL_MAIN__" -c "src/server.c" -o "server.o"
     if ($LASTEXITCODE -ne 0) { throw "gcc failed for src/server.c" }
 

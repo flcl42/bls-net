@@ -12,6 +12,12 @@ public readonly struct Fr : IEquatable<Fr>
     private const ulong M2 = 0x3339d80809a1d805UL;
     private const ulong M3 = 0x73eda753299d7d48UL;
 
+    // 2^256 - r.
+    private const ulong NegM0 = 0x00000000ffffffffUL;
+    private const ulong NegM1 = 0xac425bfd0001a401UL;
+    private const ulong NegM2 = 0xccc627f7f65e27faUL;
+    private const ulong NegM3 = 0x8c1258acd66282b7UL;
+
     private readonly ulong _l0;
     private readonly ulong _l1;
     private readonly ulong _l2;
@@ -145,36 +151,30 @@ public readonly struct Fr : IEquatable<Fr>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Add(out Fr result, in Fr left, in Fr right)
     {
-        ulong carry = AddCarry(left._l0, right._l0, out ulong r0);
-        carry = AddCarry(left._l1, right._l1, carry, out ulong r1);
-        carry = AddCarry(left._l2, right._l2, carry, out ulong r2);
-        carry = AddCarry(left._l3, right._l3, carry, out ulong r3);
+        // r < 2^255, so left + right < 2^256 never carries out of the top limb.
+        ulong r0 = left._l0 + right._l0;
+        ulong carry = r0 < left._l0 ? 1UL : 0UL;
+        ulong r1 = AddCarry(left._l1, right._l1, ref carry);
+        ulong r2 = AddCarry(left._l2, right._l2, ref carry);
+        ulong r3 = AddCarry(left._l3, right._l3, ref carry);
 
-        ulong borrow = SubBorrow(r0, M0, 0, out ulong s0);
-        borrow = SubBorrow(r1, M1, borrow, out ulong s1);
-        borrow = SubBorrow(r2, M2, borrow, out ulong s2);
-        borrow = SubBorrow(r3, M3, borrow, out ulong s3);
-
-        ulong mask = ChoiceToMask(carry | (borrow ^ 1UL));
-        result = new Fr(
-            Select(s0, r0, mask),
-            Select(s1, r1, mask),
-            Select(s2, r2, mask),
-            Select(s3, r3, mask));
+        Reduce(out result, r0, r1, r2, r3);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Subtract(out Fr result, in Fr left, in Fr right)
     {
-        ulong borrow = SubBorrow(left._l0, right._l0, 0, out ulong r0);
-        borrow = SubBorrow(left._l1, right._l1, borrow, out ulong r1);
-        borrow = SubBorrow(left._l2, right._l2, borrow, out ulong r2);
-        borrow = SubBorrow(left._l3, right._l3, borrow, out ulong r3);
+        ulong r0 = left._l0 - right._l0;
+        ulong borrow = r0 > left._l0 ? 1UL : 0UL;
+        ulong r1 = SubBorrow(left._l1, right._l1, ref borrow);
+        ulong r2 = SubBorrow(left._l2, right._l2, ref borrow);
+        ulong r3 = SubBorrow(left._l3, right._l3, ref borrow);
 
-        ulong carry = AddCarry(r0, M0, out ulong s0);
-        carry = AddCarry(r1, M1, carry, out ulong s1);
-        carry = AddCarry(r2, M2, carry, out ulong s2);
-        AddCarry(r3, M3, carry, out ulong s3);
+        ulong s0 = r0 + M0;
+        ulong carry = s0 < r0 ? 1UL : 0UL;
+        ulong s1 = AddCarry(r1, M1, ref carry);
+        ulong s2 = AddCarry(r2, M2, ref carry);
+        ulong s3 = AddCarry(r3, M3, ref carry);
 
         ulong mask = ChoiceToMask(borrow);
         result = new Fr(
@@ -187,10 +187,11 @@ public readonly struct Fr : IEquatable<Fr>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Negate(out Fr result, in Fr value)
     {
-        ulong borrow = SubBorrow(M0, value._l0, 0, out ulong r0);
-        borrow = SubBorrow(M1, value._l1, borrow, out ulong r1);
-        borrow = SubBorrow(M2, value._l2, borrow, out ulong r2);
-        SubBorrow(M3, value._l3, borrow, out ulong r3);
+        ulong r0 = M0 - value._l0;
+        ulong borrow = r0 > M0 ? 1UL : 0UL;
+        ulong r1 = SubBorrow(M1, value._l1, ref borrow);
+        ulong r2 = SubBorrow(M2, value._l2, ref borrow);
+        ulong r3 = SubBorrow(M3, value._l3, ref borrow);
 
         ulong mask = ChoiceToMask(NonZeroChoice(value._l0 | value._l1 | value._l2 | value._l3));
         result = new Fr(r0 & mask, r1 & mask, r2 & mask, r3 & mask);
@@ -220,82 +221,70 @@ public readonly struct Fr : IEquatable<Fr>
 
         // Iteration 0 (b0).
         {
-            carry = MulAdd(t0, a0, b0, 0, out t0);
-            carry = MulAdd(t1, a1, b0, carry, out t1);
-            carry = MulAdd(t2, a2, b0, carry, out t2);
-            carry = MulAdd(t3, a3, b0, carry, out t3);
+            carry = MulAdd(b0, a0, t0, 0, out t0);
+            carry = MulAdd(b0, a1, t1, carry, out t1);
+            carry = MulAdd(b0, a2, t2, carry, out t2);
+            carry = MulAdd(b0, a3, t3, carry, out t3);
             t4 = carry;
 
             q = t0 * N0;
-            carry = MulAdd(t0, q, M0, 0, out _);
-            carry = MulAdd(t1, q, M1, carry, out t0);
-            carry = MulAdd(t2, q, M2, carry, out t1);
-            carry = MulAdd(t3, q, M3, carry, out t2);
+            carry = MulAdd(q, M0, t0, 0, out _);
+            carry = MulAdd(q, M1, t1, carry, out t0);
+            carry = MulAdd(q, M2, t2, carry, out t1);
+            carry = MulAdd(q, M3, t3, carry, out t2);
             t3 = t4 + carry;
         }
 
         // Iteration 1 (b1).
         {
-            carry = MulAdd(t0, a0, b1, 0, out t0);
-            carry = MulAdd(t1, a1, b1, carry, out t1);
-            carry = MulAdd(t2, a2, b1, carry, out t2);
-            carry = MulAdd(t3, a3, b1, carry, out t3);
+            carry = MulAdd(b1, a0, t0, 0, out t0);
+            carry = MulAdd(b1, a1, t1, carry, out t1);
+            carry = MulAdd(b1, a2, t2, carry, out t2);
+            carry = MulAdd(b1, a3, t3, carry, out t3);
             t4 = carry;
 
             q = t0 * N0;
-            carry = MulAdd(t0, q, M0, 0, out _);
-            carry = MulAdd(t1, q, M1, carry, out t0);
-            carry = MulAdd(t2, q, M2, carry, out t1);
-            carry = MulAdd(t3, q, M3, carry, out t2);
+            carry = MulAdd(q, M0, t0, 0, out _);
+            carry = MulAdd(q, M1, t1, carry, out t0);
+            carry = MulAdd(q, M2, t2, carry, out t1);
+            carry = MulAdd(q, M3, t3, carry, out t2);
             t3 = t4 + carry;
         }
 
         // Iteration 2 (b2).
         {
-            carry = MulAdd(t0, a0, b2, 0, out t0);
-            carry = MulAdd(t1, a1, b2, carry, out t1);
-            carry = MulAdd(t2, a2, b2, carry, out t2);
-            carry = MulAdd(t3, a3, b2, carry, out t3);
+            carry = MulAdd(b2, a0, t0, 0, out t0);
+            carry = MulAdd(b2, a1, t1, carry, out t1);
+            carry = MulAdd(b2, a2, t2, carry, out t2);
+            carry = MulAdd(b2, a3, t3, carry, out t3);
             t4 = carry;
 
             q = t0 * N0;
-            carry = MulAdd(t0, q, M0, 0, out _);
-            carry = MulAdd(t1, q, M1, carry, out t0);
-            carry = MulAdd(t2, q, M2, carry, out t1);
-            carry = MulAdd(t3, q, M3, carry, out t2);
+            carry = MulAdd(q, M0, t0, 0, out _);
+            carry = MulAdd(q, M1, t1, carry, out t0);
+            carry = MulAdd(q, M2, t2, carry, out t1);
+            carry = MulAdd(q, M3, t3, carry, out t2);
             t3 = t4 + carry;
         }
 
         // Iteration 3 (b3).
         {
-            carry = MulAdd(t0, a0, b3, 0, out t0);
-            carry = MulAdd(t1, a1, b3, carry, out t1);
-            carry = MulAdd(t2, a2, b3, carry, out t2);
-            carry = MulAdd(t3, a3, b3, carry, out t3);
+            carry = MulAdd(b3, a0, t0, 0, out t0);
+            carry = MulAdd(b3, a1, t1, carry, out t1);
+            carry = MulAdd(b3, a2, t2, carry, out t2);
+            carry = MulAdd(b3, a3, t3, carry, out t3);
             t4 = carry;
 
             q = t0 * N0;
-            carry = MulAdd(t0, q, M0, 0, out _);
-            carry = MulAdd(t1, q, M1, carry, out t0);
-            carry = MulAdd(t2, q, M2, carry, out t1);
-            carry = MulAdd(t3, q, M3, carry, out t2);
+            carry = MulAdd(q, M0, t0, 0, out _);
+            carry = MulAdd(q, M1, t1, carry, out t0);
+            carry = MulAdd(q, M2, t2, carry, out t1);
+            carry = MulAdd(q, M3, t3, carry, out t2);
             t3 = t4 + carry;
         }
 
-        ulong borrow = SubBorrow(t0, M0, 0, out ulong s0);
-        borrow = SubBorrow(t1, M1, borrow, out ulong s1);
-        borrow = SubBorrow(t2, M2, borrow, out ulong s2);
-        borrow = SubBorrow(t3, M3, borrow, out ulong s3);
-
-        // t4 is always 0: Fr modulus < 2^255 (one bit short), so the
-        // Montgomery output is < 2*p < 2^256 and never overflows into t4.
-        // borrow == 0 means t >= p (use reduced s); borrow == 1 keeps t.
-        ulong mask = borrow - 1UL;
-        result = new Fr(
-            Select(s0, t0, mask),
-            Select(s1, t1, mask),
-            Select(s2, t2, mask),
-            Select(s3, t3, mask));
+        // r < 2^255, so the Montgomery output is < 2r < 2^256 and fits in t0..t3.
+        Reduce(out result, t0, t1, t2, t3);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -373,40 +362,60 @@ public readonly struct Fr : IEquatable<Fr>
         limbs[3] = _l3;
     }
 
+    // Subtracts the modulus from a value in [0, 2r) unless the value is already below it.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong MulAdd(ulong addend, ulong left, ulong right, ulong carry, out ulong low)
+    private static void Reduce(out Fr result, ulong t0, ulong t1, ulong t2, ulong t3)
     {
-        ulong high = Math.BigMul(left, right, out ulong productLow);
-        ulong sum = productLow + addend;
-        high += sum < productLow ? 1UL : 0UL;
-        low = sum + carry;
-        high += low < sum ? 1UL : 0UL;
+        // Adding 2^256 - r carries out of the top limb exactly when t >= r.
+        ulong s0 = t0 + NegM0;
+        ulong carry = s0 < t0 ? 1UL : 0UL;
+        ulong s1 = AddCarry(t1, NegM1, ref carry);
+        ulong s2 = AddCarry(t2, NegM2, ref carry);
+        ulong s3 = AddCarry(t3, NegM3, ref carry);
+
+        ulong mask = ChoiceToMask(carry);
+        result = new Fr(
+            Select(s0, t0, mask),
+            Select(s1, t1, mask),
+            Select(s2, t2, mask),
+            Select(s3, t3, mask));
+    }
+
+    // Returns the high word of multiplier * value + addend + carry and the low word in low; the sum
+    // never overflows 128 bits. Pass the multiplier shared by a row of products first: MULX takes
+    // it in RDX. The carry idioms let carry-aware JITs keep the carries in CF/OF (ADC, ADCX/ADOX).
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong MulAdd(ulong multiplier, ulong value, ulong addend, ulong carry, out ulong low)
+    {
+        ulong high = Math.BigMul(multiplier, value, out ulong productLow);
+        productLow += addend;
+        high += productLow < addend ? 1UL : 0UL;
+        productLow += carry;
+        high += productLow < carry ? 1UL : 0UL;
+        low = productLow;
         return high;
     }
 
+    // Returns left + right + carry and replaces carry (0 or 1) with the carry out.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong AddCarry(ulong left, ulong right, out ulong result)
-    {
-        result = left + right;
-        return result < left ? 1UL : 0UL;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong AddCarry(ulong left, ulong right, ulong carry, out ulong result)
+    private static ulong AddCarry(ulong left, ulong right, ref ulong carry)
     {
         ulong sum = left + right;
         ulong carry0 = sum < left ? 1UL : 0UL;
-        result = sum + carry;
-        return carry0 | (result < sum ? 1UL : 0UL);
+        ulong result = sum + carry;
+        carry = carry0 + (result < sum ? 1UL : 0UL);
+        return result;
     }
 
+    // Returns left - right - borrow and replaces borrow (0 or 1) with the borrow out.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong SubBorrow(ulong left, ulong right, ulong borrow, out ulong result)
+    private static ulong SubBorrow(ulong left, ulong right, ref ulong borrow)
     {
-        ulong subtrahend = right + borrow;
-        ulong borrow0 = subtrahend < right ? 1UL : 0UL;
-        result = left - subtrahend;
-        return borrow0 | (left < subtrahend ? 1UL : 0UL);
+        ulong difference = left - right;
+        ulong borrow0 = difference > left ? 1UL : 0UL;
+        ulong result = difference - borrow;
+        borrow = borrow0 + (result > difference ? 1UL : 0UL);
+        return result;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

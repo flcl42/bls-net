@@ -58,6 +58,59 @@ Milestone 1 has an initial managed arithmetic kernel for `Fr` and `Fp`, a no-pac
 test runner, and a benchmark runner under this directory. The benchmark runner can
 compare against native BLST when `blst.dll` is built in the repository root.
 
+## Performance
+
+The `mul+add` benchmarks (`acc = acc * a + b`, 1,000,000 dependent iterations; the runner
+reports the best of 7 rounds, the table the best of three runs) on a Ryzen 9 9950X3D, in ns
+per iteration; runs vary by about 5% on this machine:
+
+| Kernel     | .NET 11 RC1 | .NET with carry-aware JIT | blst (ADX) via P/Invoke |
+|------------|------------:|--------------------------:|------------------------:|
+| Fr mul+add |        26.7 |                      13.3 |                    12.3 |
+| Fp mul+add |        56.9 |                      23.3 |                    21.5 |
+
+The native column calls blst's MULX/ADCX/ADOX assembly through `[SuppressGCTransition]`
+imports, which is within a few percent of the same loop written in C. Without ADX (blst's
+MULQ assembly) that C loop takes 13.2 and 24.8 ns. The numbers are for this isolated loop;
+code that inlines many more operations into one method can exceed the JIT budgets below.
+
+The released JIT never keeps a carry in the flags: every carry costs `cmp; setb; movzx` and
+a register, `Math.BigMul` uses MUL, which fixes RDX:RAX and clobbers the flags, and there are
+no dual ADCX/ADOX carry chains. Together this made the managed kernels 2-3 times slower than
+blst. The kernels are written in carry idioms that a carry-aware JIT turns into `adc`/`sbb`
+and MULX/ADCX/ADOX chains:
+
+- multiply-accumulate: `hi = Math.BigMul(m, x, out lo); lo += t; hi += lo < t ? 1 : 0; lo += c; hi += lo < c ? 1 : 0;`
+  with the multiplier shared by a row of products first (MULX takes it in RDX);
+- add with carry: `s = a + b; c1 = s < a ? 1 : 0; r = s + carry; carry = c1 + (r < s ? 1 : 0);`
+- subtract with borrow: `d = a - b; b1 = d > a ? 1 : 0; r = d - borrow; borrow = b1 + (r > d ? 1 : 0);`
+- the final conditional subtraction adds `2^n - modulus`, whose carry out means "not below the modulus".
+
+The carry-aware JIT is the open (unmerged) [dotnet/runtime#134039](https://github.com/dotnet/runtime/pull/134039),
+which recognizes the add/subtract idioms and BigInteger-style multiply-accumulate loops, at
+`331fa2b3` plus [`jit/carry-rows.patch`](jit/carry-rows.patch), which:
+
+- keeps CF and OF across the rows of a Montgomery multiplication, the `MulAdd` shape above
+  (several rows per block, rows of any width, the shorter first lanes of CIOS rows);
+- lets loads, `lea`, non-zero constants and casts sit between a carry and its consumer;
+- also optimizes OSR methods, whose Tier0 frame can only hold root-method locals, not carry temporaries.
+
+The PR skips methods with exception handling and gives up on full adders in methods larger
+than 2,048 IR nodes, and a fully unrolled 6-limb row loop exceeds its dead-carry scan budget,
+which is why `Fp.Multiply` keeps its loop over rows.
+
+To reproduce, build that runtime and run the benchmark on its testhost:
+
+```powershell
+git fetch https://github.com/dotnet/runtime pull/134039/head
+git checkout 331fa2b3
+git apply <blst>/bindings/csharp-managed/jit/carry-rows.patch
+./build.cmd clr+libs -c Release
+$env:DOTNET_ROLL_FORWARD = "Major"
+$env:DOTNET_ROOT = "<runtime>/artifacts/bin/testhost/net11.0-windows-Release-x64"
+& "$env:DOTNET_ROOT/dotnet.exe" bindings/csharp-managed/Blst.Managed.Benchmarks/bin/Release/net11.0/Blst.Managed.Benchmarks.dll
+```
+
 ## Local Commands
 
 ```powershell

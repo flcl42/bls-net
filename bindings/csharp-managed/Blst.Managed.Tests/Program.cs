@@ -12,6 +12,8 @@ Run("Fr round-trips and rejects non-canonical input", TestFrParsing);
 Run("Fp round-trips and rejects non-canonical input", TestFpParsing);
 Run("Fr arithmetic matches BigInteger", () => TestFrArithmetic(frModulus));
 Run("Fp arithmetic matches BigInteger", () => TestFpArithmetic(fpModulus));
+Run("Fr arithmetic matches BigInteger on edge values", () => TestFrEdgeArithmetic(frModulus));
+Run("Fp arithmetic matches BigInteger on edge values", () => TestFpEdgeArithmetic(fpModulus));
 Run("Hot arithmetic path stays allocation-free", TestNoHotPathAllocations);
 
 Console.WriteLine("All managed arithmetic tests passed.");
@@ -71,6 +73,60 @@ static void TestFpArithmetic(BigInteger modulus)
         AssertEqualFp(Mod(-ai, modulus), a.Negate(), modulus);
         AssertEqualFp(Mod(ai * bi, modulus), a.Multiply(b), modulus);
         AssertEqualFp(Mod(ai * ai, modulus), a.Square(), modulus);
+    }
+}
+
+// Values next to the modulus, plus values whose Montgomery limbs (value * R mod modulus) sit next to
+// the modulus or to limb boundaries, so that the kernels' carry and borrow chains hit their edges.
+static BigInteger[] EdgeValues(BigInteger modulus, int montgomeryBits)
+{
+    BigInteger limb = BigInteger.One << 64;
+    BigInteger rInverse = BigInteger.ModPow(BigInteger.One << montgomeryBits, modulus - 2, modulus);
+    BigInteger[] limbs = [0, 1, modulus - 1, modulus - 2, modulus / 2, limb - 1, limb, limb * limb - 1, limb * limb];
+    return [0, 1, 2, modulus - 1, modulus - 2, modulus / 2, modulus / 2 + 1, .. limbs.Select(l => l * rInverse % modulus)];
+}
+
+static void TestFrEdgeArithmetic(BigInteger modulus)
+{
+    const int montgomeryBits = 256;
+    Span<byte> bytes = stackalloc byte[Fr.ByteCount];
+    foreach (BigInteger ai in EdgeValues(modulus, montgomeryBits))
+    {
+        foreach (BigInteger bi in EdgeValues(modulus, montgomeryBits))
+        {
+            WriteBigEndian(ai, bytes);
+            Assert(Fr.TryFromBigEndian(bytes, out Fr a), "Fr edge value should parse.");
+            WriteBigEndian(bi, bytes);
+            Assert(Fr.TryFromBigEndian(bytes, out Fr b), "Fr edge value should parse.");
+
+            AssertEqualFr(Mod(ai + bi, modulus), a.Add(b), modulus);
+            AssertEqualFr(Mod(ai - bi, modulus), a.Subtract(b), modulus);
+            AssertEqualFr(Mod(-ai, modulus), a.Negate(), modulus);
+            AssertEqualFr(Mod(ai * bi, modulus), a.Multiply(b), modulus);
+            AssertEqualFr(Mod(ai * ai, modulus), a.Square(), modulus);
+        }
+    }
+}
+
+static void TestFpEdgeArithmetic(BigInteger modulus)
+{
+    const int montgomeryBits = 384;
+    Span<byte> bytes = stackalloc byte[Fp.ByteCount];
+    foreach (BigInteger ai in EdgeValues(modulus, montgomeryBits))
+    {
+        foreach (BigInteger bi in EdgeValues(modulus, montgomeryBits))
+        {
+            WriteBigEndian(ai, bytes);
+            Assert(Fp.TryFromBigEndian(bytes, out Fp a), "Fp edge value should parse.");
+            WriteBigEndian(bi, bytes);
+            Assert(Fp.TryFromBigEndian(bytes, out Fp b), "Fp edge value should parse.");
+
+            AssertEqualFp(Mod(ai + bi, modulus), a.Add(b), modulus);
+            AssertEqualFp(Mod(ai - bi, modulus), a.Subtract(b), modulus);
+            AssertEqualFp(Mod(-ai, modulus), a.Negate(), modulus);
+            AssertEqualFp(Mod(ai * bi, modulus), a.Multiply(b), modulus);
+            AssertEqualFp(Mod(ai * ai, modulus), a.Square(), modulus);
+        }
     }
 }
 
@@ -140,6 +196,10 @@ static void AssertEqualFr(BigInteger expected, Fr actual, BigInteger modulus)
     actual.ToBigEndian(bytes);
     BigInteger actualInteger = new(bytes, isUnsigned: true, isBigEndian: true);
     Assert(actualInteger == Mod(expected, modulus), $"Fr mismatch: expected {expected}, got {actualInteger}.");
+
+    // Equality compares the Montgomery limbs, so a result that is congruent but not fully reduced fails.
+    WriteBigEndian(Mod(expected, modulus), bytes);
+    Assert(Fr.TryFromBigEndian(bytes, out Fr canonical) && actual == canonical, $"Fr result for {expected} is not reduced.");
 }
 
 static void AssertEqualFp(BigInteger expected, Fp actual, BigInteger modulus)
@@ -148,6 +208,18 @@ static void AssertEqualFp(BigInteger expected, Fp actual, BigInteger modulus)
     actual.ToBigEndian(bytes);
     BigInteger actualInteger = new(bytes, isUnsigned: true, isBigEndian: true);
     Assert(actualInteger == Mod(expected, modulus), $"Fp mismatch: expected {expected}, got {actualInteger}.");
+
+    // Equality compares the Montgomery limbs, so a result that is congruent but not fully reduced fails.
+    WriteBigEndian(Mod(expected, modulus), bytes);
+    Assert(Fp.TryFromBigEndian(bytes, out Fp canonical) && actual == canonical, $"Fp result for {expected} is not reduced.");
+}
+
+static void WriteBigEndian(BigInteger value, Span<byte> destination)
+{
+    destination.Clear();
+    bool written = value.TryWriteBytes(
+        destination[^value.GetByteCount(isUnsigned: true)..], out _, isUnsigned: true, isBigEndian: true);
+    Assert(written, "Value does not fit.");
 }
 
 static BigInteger Mod(BigInteger value, BigInteger modulus)

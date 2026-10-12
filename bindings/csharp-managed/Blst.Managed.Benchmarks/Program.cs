@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Blst.Managed.Arithmetic;
 
@@ -10,49 +11,63 @@ internal static class Program
 
     public static void Main()
     {
-        Console.WriteLine($"Iterations: {Iterations:N0}, rounds: {MeasurementRounds}");
-        BenchmarkManagedFr();
-        BenchmarkManagedFp();
-        BenchmarkNativeIfAvailable();
+        Console.WriteLine($"{RuntimeInformation.FrameworkDescription}, iterations: {Iterations:N0}, rounds: {MeasurementRounds}");
+        Fr fr = BenchmarkManagedFr();
+        Fp fp = BenchmarkManagedFp();
+        BenchmarkNativeIfAvailable(fr, fp);
     }
 
-    private static void BenchmarkManagedFr()
+    private static Fr BenchmarkManagedFr()
     {
         Fr a = Fr.FromUInt64(0x1234_5678_9abc_def0UL);
         Fr b = Fr.FromUInt64(0xfedc_ba98_7654_3210UL);
         Fr acc = Fr.One;
 
-        Measure("managed Fr mul+add", Iterations, () =>
-        {
-            for (int i = 0; i < Iterations; i++)
-            {
-                Fr.Multiply(out acc, acc, a);
-                Fr.Add(out acc, acc, b);
-            }
-        });
+        Measure("managed Fr mul+add", Iterations, () => acc = RunFr(Iterations, acc, a, b));
 
-        GC.KeepAlive(acc);
+        return acc;
     }
 
-    private static void BenchmarkManagedFp()
+    // The measured loops keep the accumulator in a local, not in a field of the lambda's closure, and
+    // read the operands through references like the native loops below.
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static Fr RunFr(int iterations, Fr acc, in Fr a, in Fr b)
+    {
+        for (int i = 0; i < iterations; i++)
+        {
+            Fr.Multiply(out acc, acc, a);
+            Fr.Add(out acc, acc, b);
+        }
+
+        return acc;
+    }
+
+    private static Fp BenchmarkManagedFp()
     {
         Fp a = Fp.FromUInt64(0x1234_5678_9abc_def0UL);
         Fp b = Fp.FromUInt64(0xfedc_ba98_7654_3210UL);
         Fp acc = Fp.One;
 
-        Measure("managed Fp mul+add", Iterations, () =>
-        {
-            for (int i = 0; i < Iterations; i++)
-            {
-                Fp.Multiply(out acc, acc, a);
-                Fp.Add(out acc, acc, b);
-            }
-        });
+        Measure("managed Fp mul+add", Iterations, () => acc = RunFp(Iterations, acc, a, b));
 
-        GC.KeepAlive(acc);
+        return acc;
     }
 
-    private static void BenchmarkNativeIfAvailable()
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static Fp RunFp(int iterations, Fp acc, in Fp a, in Fp b)
+    {
+        for (int i = 0; i < iterations; i++)
+        {
+            Fp.Multiply(out acc, acc, a);
+            Fp.Add(out acc, acc, b);
+        }
+
+        return acc;
+    }
+
+    // Both sides run the same number of iterations from the same values, so the final
+    // accumulators must agree; this checks the measured managed loops.
+    private static void BenchmarkNativeIfAvailable(Fr managedFr, Fp managedFp)
     {
         try
         {
@@ -64,8 +79,8 @@ internal static class Program
             return;
         }
 
-        NativeBlst.BenchmarkFr(Iterations);
-        NativeBlst.BenchmarkFp(Iterations);
+        NativeBlst.BenchmarkFr(Iterations, managedFr);
+        NativeBlst.BenchmarkFp(Iterations, managedFp);
     }
 
     private static void Measure(string name, int iterations, Action body)
@@ -121,7 +136,7 @@ internal static class Program
             blst_fr_from_uint64(&ret, one);
         }
 
-        public static void BenchmarkFr(int iterations)
+        public static void BenchmarkFr(int iterations, Fr expected)
         {
             FrNative a = default;
             FrNative b = default;
@@ -160,9 +175,18 @@ internal static class Program
             }
 
             PrintNativeResult("native C Fr mul+add", iterations, bestTicks, bestAllocated);
+
+            ulong* canonical = stackalloc ulong[4];
+            blst_uint64_from_fr(canonical, &acc);
+            Span<byte> bytes = stackalloc byte[Fr.ByteCount];
+            expected.ToLittleEndian(bytes);
+            if (!bytes.SequenceEqual(new ReadOnlySpan<byte>(canonical, Fr.ByteCount)))
+            {
+                throw new InvalidOperationException("Managed and native Fr mul+add results differ.");
+            }
         }
 
-        public static void BenchmarkFp(int iterations)
+        public static void BenchmarkFp(int iterations, Fp expected)
         {
             FpNative a = default;
             FpNative b = default;
@@ -201,8 +225,18 @@ internal static class Program
             }
 
             PrintNativeResult("native C Fp mul+add", iterations, bestTicks, bestAllocated);
+
+            ulong* canonical = stackalloc ulong[6];
+            blst_uint64_from_fp(canonical, &acc);
+            Span<byte> bytes = stackalloc byte[Fp.ByteCount];
+            expected.ToLittleEndian(bytes);
+            if (!bytes.SequenceEqual(new ReadOnlySpan<byte>(canonical, Fp.ByteCount)))
+            {
+                throw new InvalidOperationException("Managed and native Fp mul+add results differ.");
+            }
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
         private static void RunFr(int iterations, FrNative* acc, FrNative* a, FrNative* b)
         {
             for (int i = 0; i < iterations; i++)
@@ -212,6 +246,7 @@ internal static class Program
             }
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
         private static void RunFp(int iterations, FpNative* acc, FpNative* a, FpNative* b)
         {
             for (int i = 0; i < iterations; i++)
@@ -244,18 +279,28 @@ internal static class Program
         private static extern void blst_fr_from_uint64(FrNative* ret, ulong* value);
 
         [DllImport("blst.dll", CallingConvention = CallingConvention.Cdecl)]
+        [SuppressGCTransition]
         private static extern void blst_fr_mul(FrNative* ret, FrNative* left, FrNative* right);
 
         [DllImport("blst.dll", CallingConvention = CallingConvention.Cdecl)]
+        [SuppressGCTransition]
         private static extern void blst_fr_add(FrNative* ret, FrNative* left, FrNative* right);
 
         [DllImport("blst.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern void blst_fp_from_uint64(FpNative* ret, ulong* value);
 
         [DllImport("blst.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void blst_uint64_from_fr(ulong* ret, FrNative* value);
+
+        [DllImport("blst.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void blst_uint64_from_fp(ulong* ret, FpNative* value);
+
+        [DllImport("blst.dll", CallingConvention = CallingConvention.Cdecl)]
+        [SuppressGCTransition]
         private static extern void blst_fp_mul(FpNative* ret, FpNative* left, FpNative* right);
 
         [DllImport("blst.dll", CallingConvention = CallingConvention.Cdecl)]
+        [SuppressGCTransition]
         private static extern void blst_fp_add(FpNative* ret, FpNative* left, FpNative* right);
 
         private struct FrNative
