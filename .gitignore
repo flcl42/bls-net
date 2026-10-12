@@ -73,3 +73,7 @@ obj/
 
 zig-out
 .zig-cache
+
+# Local toolchains and temporary native build products
+build/native-tools/
+build/native-win64/
