@@ -220,17 +220,68 @@ public readonly struct Fp : IEquatable<Fp>
         result = new Fp(r0 & mask, r1 & mask, r2 & mask, r3 & mask, r4 & mask, r5 & mask);
     }
 
+    [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Multiply(out Fp result, in Fp left, in Fp right)
     {
-        Span<ulong> l = stackalloc ulong[6];
-        Span<ulong> r = stackalloc ulong[6];
-        Span<ulong> o = stackalloc ulong[6];
-        left.Store(l);
-        right.Store(r);
+        ulong a0 = left._l0;
+        ulong a1 = left._l1;
+        ulong a2 = left._l2;
+        ulong a3 = left._l3;
+        ulong a4 = left._l4;
+        ulong a5 = left._l5;
 
-        LimbMath.MontgomeryMultiply(o, l, r, Modulus, N0);
-        result = new Fp(o);
+        // Keep a reference to right's limbs so the outer loop stays small.
+        // The JIT lowers Unsafe.Add with a loop index to a single lea/mov (no bounds checks).
+        ref ulong bRef = ref Unsafe.As<Fp, ulong>(ref Unsafe.AsRef(in right));
+
+        ulong t0 = 0;
+        ulong t1 = 0;
+        ulong t2 = 0;
+        ulong t3 = 0;
+        ulong t4 = 0;
+        ulong t5 = 0;
+        ulong t6 = 0;
+
+        for (int i = 0; i < 6; i++)
+        {
+            ulong b = Unsafe.Add(ref bRef, i);
+
+            ulong carry = MulAdd(t0, a0, b, 0, out t0);
+            carry = MulAdd(t1, a1, b, carry, out t1);
+            carry = MulAdd(t2, a2, b, carry, out t2);
+            carry = MulAdd(t3, a3, b, carry, out t3);
+            carry = MulAdd(t4, a4, b, carry, out t4);
+            carry = MulAdd(t5, a5, b, carry, out t5);
+            t6 = carry;
+
+            ulong q = t0 * N0;
+            carry = MulAdd(t0, q, M0, 0, out _);
+            carry = MulAdd(t1, q, M1, carry, out t0);
+            carry = MulAdd(t2, q, M2, carry, out t1);
+            carry = MulAdd(t3, q, M3, carry, out t2);
+            carry = MulAdd(t4, q, M4, carry, out t3);
+            carry = MulAdd(t5, q, M5, carry, out t4);
+            t5 = t6 + carry;
+        }
+
+        ulong borrow = SubBorrow(t0, M0, 0, out ulong s0);
+        borrow = SubBorrow(t1, M1, borrow, out ulong s1);
+        borrow = SubBorrow(t2, M2, borrow, out ulong s2);
+        borrow = SubBorrow(t3, M3, borrow, out ulong s3);
+        borrow = SubBorrow(t4, M4, borrow, out ulong s4);
+        borrow = SubBorrow(t5, M5, borrow, out ulong s5);
+
+        // t6 is always 0: Fp modulus < 2^383 (one bit short), so the
+        // Montgomery output is < 2*p < 2^384 and never overflows into t6.
+        ulong mask = borrow - 1UL;
+        result = new Fp(
+            Select(s0, t0, mask),
+            Select(s1, t1, mask),
+            Select(s2, t2, mask),
+            Select(s3, t3, mask),
+            Select(s4, t4, mask),
+            Select(s5, t5, mask));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -313,6 +364,17 @@ public readonly struct Fp : IEquatable<Fp>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong MulAdd(ulong addend, ulong left, ulong right, ulong carry, out ulong low)
+    {
+        ulong high = Math.BigMul(left, right, out ulong productLow);
+        ulong sum = productLow + addend;
+        high += sum < productLow ? 1UL : 0UL;
+        low = sum + carry;
+        high += low < sum ? 1UL : 0UL;
+        return high;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ulong AddCarry(ulong left, ulong right, out ulong result)
     {
         result = left + right;
@@ -346,7 +408,7 @@ public readonly struct Fp : IEquatable<Fp>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ulong Select(ulong whenSet, ulong whenClear, ulong mask)
     {
-        return (whenSet & mask) | (whenClear & ~mask);
+        return whenClear ^ ((whenClear ^ whenSet) & mask);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

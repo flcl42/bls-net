@@ -196,28 +196,106 @@ public readonly struct Fr : IEquatable<Fr>
         result = new Fr(r0 & mask, r1 & mask, r2 & mask, r3 & mask);
     }
 
+    [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Multiply(out Fr result, in Fr left, in Fr right)
     {
-        Span<ulong> t = stackalloc ulong[5];
-        t.Clear();
+        ulong a0 = left._l0;
+        ulong a1 = left._l1;
+        ulong a2 = left._l2;
+        ulong a3 = left._l3;
+        ulong b0 = right._l0;
+        ulong b1 = right._l1;
+        ulong b2 = right._l2;
+        ulong b3 = right._l3;
 
-        MontgomeryStep(t, left, right._l0);
-        MontgomeryStep(t, left, right._l1);
-        MontgomeryStep(t, left, right._l2);
-        MontgomeryStep(t, left, right._l3);
+        ulong t0 = 0;
+        ulong t1 = 0;
+        ulong t2 = 0;
+        ulong t3 = 0;
+        ulong t4;
 
-        ulong borrow = SubBorrow(t[0], M0, 0, out ulong s0);
-        borrow = SubBorrow(t[1], M1, borrow, out ulong s1);
-        borrow = SubBorrow(t[2], M2, borrow, out ulong s2);
-        borrow = SubBorrow(t[3], M3, borrow, out ulong s3);
+        ulong carry;
+        ulong q;
 
-        ulong mask = ChoiceToMask(NonZeroChoice(t[4]) | (borrow ^ 1UL));
+        // Iteration 0 (b0).
+        {
+            carry = MulAdd(t0, a0, b0, 0, out t0);
+            carry = MulAdd(t1, a1, b0, carry, out t1);
+            carry = MulAdd(t2, a2, b0, carry, out t2);
+            carry = MulAdd(t3, a3, b0, carry, out t3);
+            t4 = carry;
+
+            q = t0 * N0;
+            carry = MulAdd(t0, q, M0, 0, out _);
+            carry = MulAdd(t1, q, M1, carry, out t0);
+            carry = MulAdd(t2, q, M2, carry, out t1);
+            carry = MulAdd(t3, q, M3, carry, out t2);
+            t3 = t4 + carry;
+        }
+
+        // Iteration 1 (b1).
+        {
+            carry = MulAdd(t0, a0, b1, 0, out t0);
+            carry = MulAdd(t1, a1, b1, carry, out t1);
+            carry = MulAdd(t2, a2, b1, carry, out t2);
+            carry = MulAdd(t3, a3, b1, carry, out t3);
+            t4 = carry;
+
+            q = t0 * N0;
+            carry = MulAdd(t0, q, M0, 0, out _);
+            carry = MulAdd(t1, q, M1, carry, out t0);
+            carry = MulAdd(t2, q, M2, carry, out t1);
+            carry = MulAdd(t3, q, M3, carry, out t2);
+            t3 = t4 + carry;
+        }
+
+        // Iteration 2 (b2).
+        {
+            carry = MulAdd(t0, a0, b2, 0, out t0);
+            carry = MulAdd(t1, a1, b2, carry, out t1);
+            carry = MulAdd(t2, a2, b2, carry, out t2);
+            carry = MulAdd(t3, a3, b2, carry, out t3);
+            t4 = carry;
+
+            q = t0 * N0;
+            carry = MulAdd(t0, q, M0, 0, out _);
+            carry = MulAdd(t1, q, M1, carry, out t0);
+            carry = MulAdd(t2, q, M2, carry, out t1);
+            carry = MulAdd(t3, q, M3, carry, out t2);
+            t3 = t4 + carry;
+        }
+
+        // Iteration 3 (b3).
+        {
+            carry = MulAdd(t0, a0, b3, 0, out t0);
+            carry = MulAdd(t1, a1, b3, carry, out t1);
+            carry = MulAdd(t2, a2, b3, carry, out t2);
+            carry = MulAdd(t3, a3, b3, carry, out t3);
+            t4 = carry;
+
+            q = t0 * N0;
+            carry = MulAdd(t0, q, M0, 0, out _);
+            carry = MulAdd(t1, q, M1, carry, out t0);
+            carry = MulAdd(t2, q, M2, carry, out t1);
+            carry = MulAdd(t3, q, M3, carry, out t2);
+            t3 = t4 + carry;
+        }
+
+        ulong borrow = SubBorrow(t0, M0, 0, out ulong s0);
+        borrow = SubBorrow(t1, M1, borrow, out ulong s1);
+        borrow = SubBorrow(t2, M2, borrow, out ulong s2);
+        borrow = SubBorrow(t3, M3, borrow, out ulong s3);
+
+        // t4 is always 0: Fr modulus < 2^255 (one bit short), so the
+        // Montgomery output is < 2*p < 2^256 and never overflows into t4.
+        // borrow == 0 means t >= p (use reduced s); borrow == 1 keeps t.
+        ulong mask = borrow - 1UL;
         result = new Fr(
-            Select(s0, t[0], mask),
-            Select(s1, t[1], mask),
-            Select(s2, t[2], mask),
-            Select(s3, t[3], mask));
+            Select(s0, t0, mask),
+            Select(s1, t1, mask),
+            Select(s2, t2, mask),
+            Select(s3, t3, mask));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -296,23 +374,6 @@ public readonly struct Fr : IEquatable<Fr>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void MontgomeryStep(Span<ulong> t, in Fr left, ulong right)
-    {
-        ulong carry = MulAdd(t[0], left._l0, right, 0, out t[0]);
-        carry = MulAdd(t[1], left._l1, right, carry, out t[1]);
-        carry = MulAdd(t[2], left._l2, right, carry, out t[2]);
-        carry = MulAdd(t[3], left._l3, right, carry, out t[3]);
-        t[4] = carry;
-
-        ulong q = t[0] * N0;
-        carry = MulAdd(t[0], q, M0, 0, out _);
-        carry = MulAdd(t[1], q, M1, carry, out t[0]);
-        carry = MulAdd(t[2], q, M2, carry, out t[1]);
-        carry = MulAdd(t[3], q, M3, carry, out t[2]);
-        t[4] = AddCarry(t[4], carry, out t[3]);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ulong MulAdd(ulong addend, ulong left, ulong right, ulong carry, out ulong low)
     {
         ulong high = Math.BigMul(left, right, out ulong productLow);
@@ -357,7 +418,7 @@ public readonly struct Fr : IEquatable<Fr>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ulong Select(ulong whenSet, ulong whenClear, ulong mask)
     {
-        return (whenSet & mask) | (whenClear & ~mask);
+        return whenClear ^ ((whenClear ^ whenSet) & mask);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
