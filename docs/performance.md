@@ -1,5 +1,12 @@
 # Performance
 
+The [round 3 field and JIT report](field-kernel-round3-report.md) measures the
+merged algorithm/field baseline at `75a7ccc` against symmetric Fp squaring,
+direct disjoint-output raw products, inlined Fp2 subtraction and larger bounded
+carry-analysis allowances. It includes kernels and tower/pairing/curve/map/MSM
+paths on all three runtimes. Earlier tables below retain their original code
+and JIT revisions.
+
 The subsequent [algorithm-layer follow-up](agentG-report.md) records three-runtime before/after measurements, native Fp6 timings, full MSM sweeps, integration profiles, local commits and validation. It includes compressed final-exponentiation powers, an early return when the easy part yields one, and endomorphism-derived multiplication/MSM tables. The [operation-count audit](algorithm-audit.md) explains both the gains and the remaining gaps. The historical measurements below are retained as their original captures.
 
 The follow-up uses Agent F's final shared JIT update for both patched baseline and final captures, with Fp/Fp2 source changes still unmerged. General final exponentiation improves by about 9%, G2 multiplication by about 29%, and all sampled patched MSM sizes beat their same-process native timings. General pairing and maps still retain gaps; the full report distinguishes those paths from repeated-point MSMs and cancelling-pair precompile inputs.

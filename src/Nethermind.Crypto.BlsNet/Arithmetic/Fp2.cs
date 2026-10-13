@@ -44,8 +44,8 @@ public struct Fp2 : IEquatable<Fp2>, IField<Fp2>
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Subtract(out Fp2 result, in Fp2 left, in Fp2 right)
     {
-        Fp.SubtractComposite(out result.C0, left.C0, right.C0);
-        Fp.SubtractComposite(out result.C1, left.C1, right.C1);
+        Fp.Subtract(out result.C0, left.C0, right.C0);
+        Fp.Subtract(out result.C1, left.C1, right.C1);
     }
 
     [SkipLocalsInit]
@@ -117,9 +117,9 @@ public struct Fp2 : IEquatable<Fp2>, IField<Fp2>
         // and imaginary lies in [0, 2p^2), so both fit their reducer's pR bound.
         Fp.AddUnreduced(out Fp sa, left.C0, left.C1);
         Fp.AddUnreduced(out Fp sb, right.C0, right.C1);
-        Fp.MultiplyWide(out FpWide t0, left.C0, right.C0);
-        Fp.MultiplyWide(out FpWide t1, left.C1, right.C1);
-        Fp.MultiplyWide(out FpWide t2, sa, sb);
+        Fp.MultiplyWideNoAlias(out FpWide t0, left.C0, right.C0);
+        Fp.MultiplyWideNoAlias(out FpWide t1, left.C1, right.C1);
+        Fp.MultiplyWideNoAlias(out FpWide t2, sa, sb);
         Fp.SubtractWideImaginary(ref t2, t0, t1);
         Fp.ReduceWideDifference(out result.C0, t0, t1);
         Fp.ReduceWidePositive(out result.C1, t2);

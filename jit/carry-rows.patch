@@ -58,7 +58,7 @@ index 365f01f7..ee1b6e5b 100644
      // functionality even if their actual identifier differs and we should optimize these
  
 diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
-index 5ce80283..7f8ef324 100644
+index 5ce80283..29a15e47 100644
 --- a/src/coreclr/jit/lower.cpp
 +++ b/src/coreclr/jit/lower.cpp
 @@ -9817,6 +9817,7 @@ void Lowering::AfterLowerBlocks()
@@ -102,10 +102,100 @@ index 5ce80283..7f8ef324 100644
          {
              TryLowerMultiplyCarryBackedge();
              hasAdx |= TryLowerMultiplyCarryLoop();
-@@ -14398,6 +14403,15 @@ bool Lowering::TryLowerMultiplyCarryChain()
-         lane.add[1]->AsOp()->gtOp2 = lane.low;
-         lane.add[0]->ChangeOper(GT_ADCX);
-         lane.add[1]->ChangeOper(GT_ADOX);
+@@ -14309,116 +14314,1022 @@ bool Lowering::TryLowerMultiplyCarryChain()
+         {
+             return false;
+         }
+-        for (GenTree* node = lane.add[0]; node != lane.carry; node = node->gtNext)
++        for (GenTree* node = lane.add[0]; node != lane.carry; node = node->gtNext)
++        {
++            if (node == nullptr || (node->OperIsLocalStore() && node->AsLclVarCommon()->GetLclNum() == carryLocal))
++            {
++                return false;
++            }
++        }
++    }
++
++    if (laneCount == 1)
++    {
++        // The product feeds both halves of this proven multiply-accumulate.
++        // Keep MULX's independent outputs for scalar tails without introducing
++        // an ADX seed/drain pair for a single lane.
++        lanes[0].product->gtFlags |= GTF_HW_MULX;
++        return false;
++    }
++
++    GenTree*                 first = lanes[0].add[0];
++    GenTree*                 last  = lanes[laneCount - 1].adc[1];
++    jitstd::vector<GenTree*> addresses(m_compiler->getAllocator(CMK_Lower));
++    for (GenTree* node = first; node != last->gtNext; node = node->gtNext)
++    {
++        bool matched = false;
++        for (unsigned i = 0; i < laneCount; i++)
++        {
++            Lane& lane = lanes[i];
++            matched |= node == lane.product || node == lane.add[0] || node == lane.add[1] || node == lane.adc[0] ||
++                       node == lane.adc[1];
++        }
++        if (matched)
++        {
++            continue;
++        }
++        switch (node->OperGet())
++        {
++            case GT_LCL_VAR:
++            case GT_STORE_LCL_VAR:
++            case GT_IL_OFFSET:
++            case GT_LEA:
++                break;
++            case GT_CAST:
++                if (node->gtOverflow() || !node->TypeIs(TYP_LONG) || !node->gtGetOp1()->TypeIs(TYP_INT))
++                {
++                    return false;
++                }
++                break;
++            case GT_IND:
++            case GT_STOREIND:
++                if (!node->TypeIs(TYP_LONG) || (node->gtFlags & GTF_IND_VOLATILE) != 0)
++                {
++                    return false;
++                }
++                break;
++            case GT_CNS_INT:
++                if (!node->isContained())
++                {
++                    return false;
++                }
++                break;
++            case GT_ADD:
++                if (node->gtSetFlags() || node->gtOverflow() || !node->TypeIs(TYP_INT, TYP_LONG, TYP_BYREF) ||
++                    !node->gtGetOp1()->OperIs(GT_LCL_VAR) || !node->gtGetOp2()->IsIntCnsFitsInI32())
++                {
++                    return false;
++                }
++                addresses.push_back(node);
++                break;
++            default:
++                return false;
++        }
++    }
++
++    JITDUMP("Keeping multiply-accumulate CF and OF chains across %u lanes in " FMT_BB "\n", laneCount, m_block->bbNum);
++    GenTree* initialize = new (m_compiler, GT_ADX_SEED) GenTree(GT_ADX_SEED, TYP_VOID);
++    BlockRange().InsertBefore(first, initialize);
++    for (unsigned i = 0; i < laneCount; i++)
++    {
++        Lane& lane = lanes[i];
++        // Every product in the matched chain must preserve both live carry flags.
++        lane.product->gtFlags |= GTF_HW_MULX;
++        BlockRange().Remove(lane.carry);
++        BlockRange().InsertBefore(lane.add[0], lane.carry);
++        lane.add[0]->AsOp()->gtOp1 = lane.carry;
++        lane.add[0]->AsOp()->gtOp2 = lane.destination;
++        lane.add[1]->AsOp()->gtOp1 = lane.partial;
++        lane.add[1]->AsOp()->gtOp2 = lane.low;
++        lane.add[0]->ChangeOper(GT_ADCX);
++        lane.add[1]->ChangeOper(GT_ADOX);
 +        for (GenTree* add : lane.add)
 +        {
 +            for (GenTree* operand : add->Operands())
@@ -115,13 +205,29 @@ index 5ce80283..7f8ef324 100644
 +            }
 +            ContainCheckBinary(add->AsOp());
 +        }
-         for (GenTree* adc : lane.adc)
-         {
-             LIR::Use use;
-@@ -14421,6 +14435,903 @@ bool Lowering::TryLowerMultiplyCarryChain()
-     return true;
- }
- 
++        for (GenTree* adc : lane.adc)
++        {
++            LIR::Use use;
++            bool     found = BlockRange().TryGetUse(adc, &use);
++            assert(found);
++            GenTree* replacement = adc->gtGetOp1();
++            if (adc == last)
++            {
++                replacement = m_compiler->gtNewOperNode(GT_ADX_DRAIN, TYP_LONG, replacement);
++                BlockRange().InsertBefore(adc, replacement);
++            }
++            use.ReplaceWith(replacement);
++            BlockRange().Remove(adc->gtGetOp2());
++            BlockRange().Remove(adc);
++        }
++    }
++    for (GenTree* add : addresses)
++    {
++        ReplaceCarryAddressAdd(add);
++    }
++    return true;
++}
++
 +//------------------------------------------------------------------------
 +// TryLowerMultiplyCarryRows: Keep CF and OF across each row of a multi-limb
 +// multiply-accumulate when a block holds several rows, or rows wider than
@@ -837,26 +943,59 @@ index 5ce80283..7f8ef324 100644
 +            value  = value->gtGetOp1();
 +        }
 +        if (value->OperIs(GT_LCL_VAR))
-+        {
+         {
+-            if (node == nullptr || (node->OperIsLocalStore() && node->AsLclVarCommon()->GetLclNum() == carryLocal))
 +            bitRead = value;
 +            if (!prevRef.Lookup(bitRead, &bitDef) || !bitDef->OperIs(GT_STORE_LCL_VAR) ||
 +                m_compiler->lvaGetDesc(bitRead->AsLclVar()->GetLclNum())->IsAddressExposed())
-+            {
+             {
+-                return false;
 +                continue;
-+            }
+             }
 +            value = bitDef->gtGetOp1();
-+        }
+         }
+-    }
+-
+-    if (laneCount == 1)
+-    {
+-        // The product feeds both halves of this proven multiply-accumulate.
+-        // Keep MULX's independent outputs for scalar tails without introducing
+-        // an ADX seed/drain pair for a single lane.
+-        lanes[0].product->gtFlags |= GTF_HW_MULX;
+-        return false;
+-    }
+-
+-    GenTree*                 first = lanes[0].add[0];
+-    GenTree*                 last  = lanes[laneCount - 1].adc[1];
+-    jitstd::vector<GenTree*> addresses(m_compiler->getAllocator(CMK_Lower));
+-    for (GenTree* node = first; node != last->gtNext; node = node->gtNext)
+-    {
+-        bool matched = false;
+-        for (unsigned i = 0; i < laneCount; i++)
 +        GenTree* cast = nullptr;
 +        if (value->OperIs(GT_CAST) && !value->gtOverflow() && value->AsCast()->CastOp()->TypeIs(TYP_INT))
-+        {
+         {
+-            Lane& lane = lanes[i];
+-            matched |= node == lane.product || node == lane.add[0] || node == lane.add[1] || node == lane.adc[0] ||
+-                       node == lane.adc[1];
 +            cast  = value;
 +            value = value->AsCast()->CastOp();
-+        }
+         }
+-        if (matched)
 +        if (!value->OperIs(GT_SETCC) || (GenConditionDesc::Get(value->AsCC()->gtCondition).oper != GT_NONE) ||
 +            (value->gtPrev == nullptr) || !value->gtPrev->gtSetFlags())
-+        {
-+            continue;
-+        }
+         {
+             continue;
+         }
+-        switch (node->OperGet())
+-        {
+-            case GT_LCL_VAR:
+-            case GT_STORE_LCL_VAR:
+-            case GT_IL_OFFSET:
+-            case GT_LEA:
+-                break;
+-            case GT_CAST:
+-                if (node->gtOverflow() || !node->TypeIs(TYP_LONG) || !node->gtGetOp1()->TypeIs(TYP_INT))
 +        GenTree*     cc       = value;
 +        GenTree*     producer = cc->gtPrev;
 +        GenCondition cond     = cc->AsCC()->gtCondition;
@@ -895,10 +1034,15 @@ index 5ce80283..7f8ef324 100644
 +                GenTree* candidate = (i == 0) ? select.inner->gtGetOp1() : select.inner->gtGetOp2();
 +                if (candidate->OperIs(GT_LCL_VAR) &&
 +                    (candidate->AsLclVar()->GetLclNum() == select.t->AsLclVar()->GetLclNum()))
-+                {
+                 {
+-                    return false;
 +                    select.innerT = candidate;
 +                    select.s      = (i == 0) ? select.inner->gtGetOp2() : select.inner->gtGetOp1();
-+                }
+                 }
+-                break;
+-            case GT_IND:
+-            case GT_STOREIND:
+-                if (!node->TypeIs(TYP_LONG) || (node->gtFlags & GTF_IND_VOLATILE) != 0)
 +            }
 +            // A zero s would be materialized with a flag-clobbering XOR once uncontained.
 +            valid = valid && (select.innerT != nullptr) && !select.s->IsIntegralConst(0);
@@ -909,18 +1053,27 @@ index 5ce80283..7f8ef324 100644
 +            for (; valid && (node != nullptr); node = node->gtPrev)
 +            {
 +                if ((node == select.t) || (node == select.innerT))
-+                {
+                 {
+-                    return false;
 +                    if (laterT != nullptr)
 +                    {
 +                        break;
 +                    }
 +                    laterT = node;
-+                }
+                 }
+-                break;
+-            case GT_CNS_INT:
+-                if (!node->isContained())
 +                else if ((laterT != nullptr) && node->OperIsLocalStore() &&
 +                         (node->AsLclVarCommon()->GetLclNum() == select.t->AsLclVar()->GetLclNum()))
-+                {
+                 {
+-                    return false;
 +                    valid = false;
-+                }
+                 }
+-                break;
+-            case GT_ADD:
+-                if (node->gtSetFlags() || node->gtOverflow() || !node->TypeIs(TYP_INT, TYP_LONG, TYP_BYREF) ||
+-                    !node->gtGetOp1()->OperIs(GT_LCL_VAR) || !node->gtGetOp2()->IsIntCnsFitsInI32())
 +            }
 +            valid = valid && (node != nullptr);
 +            if (valid)
@@ -952,13 +1105,37 @@ index 5ce80283..7f8ef324 100644
 +            {
 +                if ((node == select.andNode) || (node == select.inner) || (node == select.maskRead) ||
 +                    (node == select.innerT))
-+                {
+                 {
+-                    return false;
 +                    return true;
-+                }
+                 }
+-                addresses.push_back(node);
+-                break;
+-            default:
+-                return false;
+-        }
+-    }
 +            }
 +            return false;
 +        };
-+
+ 
+-    JITDUMP("Keeping multiply-accumulate CF and OF chains across %u lanes in " FMT_BB "\n", laneCount, m_block->bbNum);
+-    GenTree* initialize = new (m_compiler, GT_ADX_SEED) GenTree(GT_ADX_SEED, TYP_VOID);
+-    BlockRange().InsertBefore(first, initialize);
+-    for (unsigned i = 0; i < laneCount; i++)
+-    {
+-        Lane& lane = lanes[i];
+-        // Every product in the matched chain must preserve both live carry flags.
+-        lane.product->gtFlags |= GTF_HW_MULX;
+-        BlockRange().Remove(lane.carry);
+-        BlockRange().InsertBefore(lane.add[0], lane.carry);
+-        lane.add[0]->AsOp()->gtOp1 = lane.carry;
+-        lane.add[0]->AsOp()->gtOp2 = lane.destination;
+-        lane.add[1]->AsOp()->gtOp1 = lane.partial;
+-        lane.add[1]->AsOp()->gtOp2 = lane.low;
+-        lane.add[0]->ChangeOper(GT_ADCX);
+-        lane.add[1]->ChangeOper(GT_ADOX);
+-        for (GenTree* adc : lane.adc)
 +        // Only nodes that leave the flags alone may remain between the producer and the last select.
 +        unsigned remaining  = (unsigned)selects.size();
 +        for (GenTree* node = producer->gtNext; valid && (remaining != 0); node = node->gtNext)
@@ -972,7 +1149,7 @@ index 5ce80283..7f8ef324 100644
 +            valid = (node != nullptr) && (isSelect || isRemoved(node) || IsCarryFlagsCrossing(node));
 +        }
 +        if (!valid)
-+        {
+         {
 +            continue;
 +        }
 +
@@ -991,11 +1168,20 @@ index 5ce80283..7f8ef324 100644
 +            GenTree* cmov = m_compiler->gtNewOperCC(GT_SELECTCC, select.outer->TypeGet(), cond, s, select.t);
 +            rewritten.Set(select.outer, cmov);
 +            BlockRange().InsertBefore(select.outer, cmov);
-+            LIR::Use use;
+             LIR::Use use;
+-            bool     found = BlockRange().TryGetUse(adc, &use);
+-            assert(found);
+-            GenTree* replacement = adc->gtGetOp1();
+-            if (adc == last)
 +            if (BlockRange().TryGetUse(select.outer, &use))
-+            {
+             {
+-                replacement = m_compiler->gtNewOperNode(GT_ADX_DRAIN, TYP_LONG, replacement);
+-                BlockRange().InsertBefore(adc, replacement);
 +                use.ReplaceWith(cmov);
-+            }
+             }
+-            use.ReplaceWith(replacement);
+-            BlockRange().Remove(adc->gtGetOp2());
+-            BlockRange().Remove(adc);
 +            else
 +            {
 +                cmov->SetUnusedValue();
@@ -1005,7 +1191,7 @@ index 5ce80283..7f8ef324 100644
 +                BlockRange().Remove(node);
 +            }
 +            ContainCheckSelect(cmov->AsOp());
-+        }
+         }
 +        for (GenTree* node :
 +             {maskStore, neg, andOne, (andOne != nullptr) ? andOne->gtGetOp2() : nullptr, bitRead, bitDef, cast, cc})
 +        {
@@ -1015,13 +1201,16 @@ index 5ce80283..7f8ef324 100644
 +            }
 +        }
 +        return true;
-+    }
+     }
+-    for (GenTree* add : addresses)
+-    {
+-        ReplaceCarryAddressAdd(add);
+-    }
+-    return true;
 +    return false;
-+}
-+
+ }
+ 
  //------------------------------------------------------------------------
- // FindMultiplyCarryStore: Find a local's sole store and sole read in this block.
- // Ordinary intermediates require a preceding store and cannot be live out.
 @@ -14935,6 +15846,17 @@ bool Lowering::TryLowerMultiplyCarryLoop()
      second->AsOp()->gtOp2 = lowRead;
      first->ChangeOper(GT_ADCX);
@@ -1040,22 +1229,39 @@ index 5ce80283..7f8ef324 100644
      for (GenTree* adc : adcs)
      {
          LIR::Use use;
-@@ -15105,11 +16027,61 @@ bool Lowering::LowerFullAdders()
+@@ -14970,12 +15892,14 @@ bool Lowering::TryLowerMultiplyCarryLoop()
+ bool Lowering::LowerFullAdders()
+ {
+     // Bound the whole-method definition analysis and the number of candidates.
++    // Composite field helpers contain several independent six-word chains;
++    // their bit proofs need more room than one isolated arithmetic operation.
+     unsigned nodeCount = 0;
+     for (BasicBlock* block : m_compiler->Blocks())
+     {
+         for (GenTree* node : LIR::AsRange(block))
+         {
+-            if (++nodeCount > 2048)
++            if (++nodeCount > 8192)
+             {
+                 return false;
+             }
+@@ -15105,12 +16029,62 @@ bool Lowering::LowerFullAdders()
                      continue;
                  }
                  LIR::Use use;
 -                if (!BlockRange().TryGetUse(output, &use) || !use.User()->OperIs(GT_STORE_LCL_VAR) ||
 -                    use.User()->AsLclVar()->GetLclNum() != local)
 +                if (!BlockRange().TryGetUse(output, &use) || !use.User()->OperIs(GT_STORE_LCL_VAR))
-+                {
-+                    continue;
-+                }
-+                unsigned outputLocal = use.User()->AsLclVar()->GetLclNum();
-+                LclVarDsc* outputDsc = m_compiler->lvaGetDesc(outputLocal);
-+                if (!outputDsc->lvTracked || outputDsc->IsAddressExposed() || outputDsc->lvIsParam)
                  {
                      continue;
                  }
+-                if (adders.size() == 32)
++                unsigned outputLocal = use.User()->AsLclVar()->GetLclNum();
++                LclVarDsc* outputDsc = m_compiler->lvaGetDesc(outputLocal);
++                if (!outputDsc->lvTracked || outputDsc->IsAddressExposed() || outputDsc->lvIsParam)
++                {
++                    continue;
++                }
 +                if (outputLocal != local)
 +                {
 +                    // A promoted input can be redefined through its parent.
@@ -1101,10 +1307,11 @@ index 5ce80283..7f8ef324 100644
 +                    }
 +                }
 +                local = outputLocal;
-                 if (adders.size() == 32)
++                if (adders.size() == 128)
                  {
                      return false;
-@@ -15191,6 +16163,7 @@ bool Lowering::LowerFullAdders()
+                 }
+@@ -15191,6 +16165,7 @@ bool Lowering::LowerFullAdders()
                      if (definition.carryLocal == adder.carryLocal && definition.output == value)
                      {
                          fullAdder = true;
@@ -1112,7 +1319,7 @@ index 5ce80283..7f8ef324 100644
                      }
                  }
                  if (!fullAdder)
-@@ -15311,6 +16284,69 @@ bool Lowering::LowerFullAdders()
+@@ -15311,6 +16286,103 @@ bool Lowering::LowerFullAdders()
      return changed;
  }
  
@@ -1149,6 +1356,40 @@ index 5ce80283..7f8ef324 100644
 +#endif
 +    }
 +#ifdef TARGET_AMD64
++    if (node->OperIs(GT_HWINTRINSIC))
++    {
++        GenTreeHWIntrinsic* product = node->AsHWIntrinsic();
++        if (product->GetHWIntrinsicId() == NI_X86Base_X64_BigMul &&
++            product->GetSimdBaseType() == TYP_ULONG)
++        {
++            if ((node->gtFlags & GTF_HW_MULX) != 0)
++            {
++                return true;
++            }
++            // A scalar unsigned product between carry limbs can preserve CF/OF
++            // with MULX. Restrict new conversions to local operands: clearing
++            // containment must not turn an accepted zero constant into XOR.
++            if (product->Op(1)->OperIs(GT_LCL_VAR) && product->Op(2)->OperIs(GT_LCL_VAR) &&
++                // Runtime's AVX2 group includes BMI2 (the MULX requirement).
++                m_compiler->compOpportunisticallyDependsOn(InstructionSet_AVX2))
++            {
++                product->Op(1)->ClearContained();
++                product->Op(1)->ClearRegOptional();
++                product->Op(2)->ClearContained();
++                product->Op(2)->ClearRegOptional();
++                node->gtFlags |= GTF_HW_MULX;
++                return true;
++            }
++        }
++    }
++    if (node->OperIs(GT_STORE_LCL_VAR) && node->TypeIs(TYP_STRUCT) &&
++        node->gtGetOp1()->OperIs(GT_HWINTRINSIC) && (node->gtGetOp1()->gtFlags & GTF_HW_MULX) != 0)
++    {
++        // The multi-register product's stores/copies preserve the flags too.
++        GenTreeHWIntrinsic* product = node->gtGetOp1()->AsHWIntrinsic();
++        return product->GetHWIntrinsicId() == NI_X86Base_X64_BigMul &&
++               product->GetSimdBaseType() == TYP_ULONG;
++    }
 +    if (node->isContained())
 +    {
 +        return true;
@@ -1182,7 +1423,7 @@ index 5ce80283..7f8ef324 100644
  //------------------------------------------------------------------------
  // LowerCarryChains: Fold final-limb consumers, then remove single-use carry
  // materialization and restoration between arithmetic stages in one block.
-@@ -15350,10 +16386,7 @@ void Lowering::LowerCarryChains()
+@@ -15350,10 +16422,7 @@ void Lowering::LowerCarryChains()
              // Folding the final limb can insert its operand reads between a
              // stage's restore and arithmetic. These register copies do not
              // change the restored flags.
@@ -1194,7 +1435,7 @@ index 5ce80283..7f8ef324 100644
              {
                  restore = restore->gtPrev;
                  restoreBudget--;
-@@ -15430,23 +16463,44 @@ void Lowering::LowerCarryChains()
+@@ -15430,23 +16499,44 @@ void Lowering::LowerCarryChains()
                  continue;
              }
  
@@ -1251,7 +1492,7 @@ index 5ce80283..7f8ef324 100644
              }
              if (crossing != restore)
              {
-@@ -15455,10 +16509,26 @@ void Lowering::LowerCarryChains()
+@@ -15455,10 +16545,26 @@ void Lowering::LowerCarryChains()
  
              // The definition may be removed only if this is its sole read up
              // to the next definition, and it cannot escape through a live-out.
@@ -1282,7 +1523,7 @@ index 5ce80283..7f8ef324 100644
                  if (use->OperIsLocal() && use->AsLclVarCommon()->GetLclNum() == local)
                  {
                      if (use->OperIs(GT_STORE_LCL_VAR))
-@@ -15471,7 +16541,7 @@ void Lowering::LowerCarryChains()
+@@ -15471,7 +16577,7 @@ void Lowering::LowerCarryChains()
                      }
                  }
              }
@@ -1291,7 +1532,7 @@ index 5ce80283..7f8ef324 100644
              {
                  continue;
              }
-@@ -15856,9 +16926,11 @@ bool Lowering::IsCarryOperandAvailable(GenTree* operand, GenTree* producer, GenT
+@@ -15856,9 +16962,11 @@ bool Lowering::IsCarryOperandAvailable(GenTree* operand, GenTree* producer, GenT
          }
      }
  
@@ -1305,7 +1546,7 @@ index 5ce80283..7f8ef324 100644
          // ensures that no intermediate value has a use left behind. Check all
          // crossed nodes for aliasing, exception ordering, and local definitions.
          bool               isClosed;
-@@ -16081,11 +17153,54 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+@@ -16081,11 +17189,54 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
          }
  #endif
          GenTree* operands[] = {(combine || negate) ? other->gtGetOp1() : other, combine ? other->gtGetOp2() : nullptr};
@@ -1364,7 +1605,7 @@ index 5ce80283..7f8ef324 100644
          }
  
          // Inserting ADC/SBB changes flags. No later consumer may observe the
-@@ -16112,14 +17227,14 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+@@ -16112,14 +17263,14 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
          if (!combine)
          {
              operands[1] = m_compiler->gtNewZeroConNode(add->TypeGet());
@@ -1381,7 +1622,7 @@ index 5ce80283..7f8ef324 100644
              }
              operands[i]->ClearContained();
              operands[i]->ClearRegOptional();
-@@ -16138,8 +17253,11 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+@@ -16138,8 +17289,11 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
          add->ChangeOper(add->OperIs(GT_SUB) ? GT_SUB_BORROW : (borrow ? GT_ADD_BORROW : GT_ADD_CARRY));
          add->gtOp1 = operands[0];
          add->gtOp2 = operands[1];
@@ -1396,7 +1637,7 @@ index 5ce80283..7f8ef324 100644
          if (cast != nullptr)
          {
 diff --git a/src/coreclr/jit/lower.h b/src/coreclr/jit/lower.h
-index 2522ef0c..42dc3127 100644
+index 2522ef0c..2b58ea5a 100644
 --- a/src/coreclr/jit/lower.h
 +++ b/src/coreclr/jit/lower.h
 @@ -182,6 +182,9 @@ private:
@@ -1413,16 +1654,18 @@ index 2522ef0c..42dc3127 100644
      void TryLowerCarryLoop(
          GenTree* sum, GenTree* restore, GenTree* cc, GenTree* cast, GenTree* store, unsigned carryLocal);
      bool IsCarryOperandAvailable(GenTree* operand, GenTree* producer, GenTree** moveStart);
-+    static bool IsCarryFlagsCrossing(GenTree* node);
++    bool IsCarryFlagsCrossing(GenTree* node);
  #endif
      GenTree* LowerJTrue(GenTreeOp* jtrue);
  #ifdef TARGET_RISCV64
-@@ -695,7 +699,8 @@ private:
+@@ -694,8 +698,9 @@ private:
+     bool        m_blockMayHaveSetCC    = true;
      bool        m_hasAddCarry          = false;
      BasicBlock* m_lastSubtractionBlock = nullptr;
-     unsigned    m_carryLocalScanBudget = 65536; // Node/block budget for current-IR dead-on-exit proofs.
+-    unsigned    m_carryLocalScanBudget = 65536; // Node/block budget for current-IR dead-on-exit proofs.
 -    unsigned    m_carryUseScanBudget   = 4096;  // Extra node visits beyond the bounded local carry-use scans.
-+    unsigned    m_carryUseScanBudget   = 16384;  // Extra node visits beyond the bounded local carry-use scans.
++    unsigned    m_carryLocalScanBudget = 262144; // Node/block budget for current-IR dead-on-exit proofs.
++    unsigned    m_carryUseScanBudget   = 65536;  // Extra node visits beyond the bounded local carry-use scans.
 +    unsigned    m_maskSelectScanBudget = 65536; // Node visits for the block rescans of LowerMaskSelects.
  #endif
  
@@ -1613,6 +1856,371 @@ index 00000000..baea60f6
 +  </PropertyGroup>
 +  <ItemGroup>
 +    <Compile Include="ComplementedCarry.cs" />
++    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
++    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
++  </ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/CompositeCarry.cs b/src/tests/JIT/opt/Add/CompositeCarry.cs
+new file mode 100644
+index 00000000..1da534c4
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/CompositeCarry.cs
+@@ -0,0 +1,341 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using System.Runtime.InteropServices;
++using Xunit;
++
++// Several independent chains in one method exceed the old candidate and
++// method-size allowances. Preserve both each row's carry and the final words.
++public class CompositeCarryTests
++{
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Add(ulong a, ulong b, ref ulong carry)
++    {
++        ulong s = a + b, c = s < a ? 1UL : 0UL;
++        ulong r = s + carry;
++        carry = c + (r < s ? 1UL : 0UL);
++        return r;
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Sub(ulong a, ulong b, ref ulong borrow)
++    {
++        ulong s = a - b, c = a < b ? 1UL : 0UL;
++        ulong r = s - borrow;
++        borrow = c + (s < borrow ? 1UL : 0UL);
++        return r;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong AddRows(ulong[] a, ulong[] b, ulong[] result)
++    {
++        ulong r0 = a[0], r1 = a[1], r2 = a[2], r3 = a[3], r4 = a[4], r5 = a[5];
++        ulong b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3], b4 = b[4], b5 = b[5];
++        ulong total = 0;
++        ulong c0 = 0;
++        r0 = Add(r0, b0, ref c0);
++        r1 = Add(r1, b1, ref c0);
++        r2 = Add(r2, b2, ref c0);
++        r3 = Add(r3, b3, ref c0);
++        r4 = Add(r4, b4, ref c0);
++        r5 = Add(r5, b5, ref c0);
++        total += c0;
++        ulong c1 = 0;
++        r0 = Add(r0, b0, ref c1);
++        r1 = Add(r1, b1, ref c1);
++        r2 = Add(r2, b2, ref c1);
++        r3 = Add(r3, b3, ref c1);
++        r4 = Add(r4, b4, ref c1);
++        r5 = Add(r5, b5, ref c1);
++        total += c1;
++        ulong c2 = 0;
++        r0 = Add(r0, b0, ref c2);
++        r1 = Add(r1, b1, ref c2);
++        r2 = Add(r2, b2, ref c2);
++        r3 = Add(r3, b3, ref c2);
++        r4 = Add(r4, b4, ref c2);
++        r5 = Add(r5, b5, ref c2);
++        total += c2;
++        ulong c3 = 0;
++        r0 = Add(r0, b0, ref c3);
++        r1 = Add(r1, b1, ref c3);
++        r2 = Add(r2, b2, ref c3);
++        r3 = Add(r3, b3, ref c3);
++        r4 = Add(r4, b4, ref c3);
++        r5 = Add(r5, b5, ref c3);
++        total += c3;
++        ulong c4 = 0;
++        r0 = Add(r0, b0, ref c4);
++        r1 = Add(r1, b1, ref c4);
++        r2 = Add(r2, b2, ref c4);
++        r3 = Add(r3, b3, ref c4);
++        r4 = Add(r4, b4, ref c4);
++        r5 = Add(r5, b5, ref c4);
++        total += c4;
++        ulong c5 = 0;
++        r0 = Add(r0, b0, ref c5);
++        r1 = Add(r1, b1, ref c5);
++        r2 = Add(r2, b2, ref c5);
++        r3 = Add(r3, b3, ref c5);
++        r4 = Add(r4, b4, ref c5);
++        r5 = Add(r5, b5, ref c5);
++        total += c5;
++        ulong c6 = 0;
++        r0 = Add(r0, b0, ref c6);
++        r1 = Add(r1, b1, ref c6);
++        r2 = Add(r2, b2, ref c6);
++        r3 = Add(r3, b3, ref c6);
++        r4 = Add(r4, b4, ref c6);
++        r5 = Add(r5, b5, ref c6);
++        total += c6;
++        ulong c7 = 0;
++        r0 = Add(r0, b0, ref c7);
++        r1 = Add(r1, b1, ref c7);
++        r2 = Add(r2, b2, ref c7);
++        r3 = Add(r3, b3, ref c7);
++        r4 = Add(r4, b4, ref c7);
++        r5 = Add(r5, b5, ref c7);
++        total += c7;
++        ulong c8 = 0;
++        r0 = Add(r0, b0, ref c8);
++        r1 = Add(r1, b1, ref c8);
++        r2 = Add(r2, b2, ref c8);
++        r3 = Add(r3, b3, ref c8);
++        r4 = Add(r4, b4, ref c8);
++        r5 = Add(r5, b5, ref c8);
++        total += c8;
++        ulong c9 = 0;
++        r0 = Add(r0, b0, ref c9);
++        r1 = Add(r1, b1, ref c9);
++        r2 = Add(r2, b2, ref c9);
++        r3 = Add(r3, b3, ref c9);
++        r4 = Add(r4, b4, ref c9);
++        r5 = Add(r5, b5, ref c9);
++        total += c9;
++        ulong c10 = 0;
++        r0 = Add(r0, b0, ref c10);
++        r1 = Add(r1, b1, ref c10);
++        r2 = Add(r2, b2, ref c10);
++        r3 = Add(r3, b3, ref c10);
++        r4 = Add(r4, b4, ref c10);
++        r5 = Add(r5, b5, ref c10);
++        total += c10;
++        ulong c11 = 0;
++        r0 = Add(r0, b0, ref c11);
++        r1 = Add(r1, b1, ref c11);
++        r2 = Add(r2, b2, ref c11);
++        r3 = Add(r3, b3, ref c11);
++        r4 = Add(r4, b4, ref c11);
++        r5 = Add(r5, b5, ref c11);
++        total += c11;
++        ulong c12 = 0;
++        r0 = Add(r0, b0, ref c12);
++        r1 = Add(r1, b1, ref c12);
++        r2 = Add(r2, b2, ref c12);
++        r3 = Add(r3, b3, ref c12);
++        r4 = Add(r4, b4, ref c12);
++        r5 = Add(r5, b5, ref c12);
++        total += c12;
++        ulong c13 = 0;
++        r0 = Add(r0, b0, ref c13);
++        r1 = Add(r1, b1, ref c13);
++        r2 = Add(r2, b2, ref c13);
++        r3 = Add(r3, b3, ref c13);
++        r4 = Add(r4, b4, ref c13);
++        r5 = Add(r5, b5, ref c13);
++        total += c13;
++        ulong c14 = 0;
++        r0 = Add(r0, b0, ref c14);
++        r1 = Add(r1, b1, ref c14);
++        r2 = Add(r2, b2, ref c14);
++        r3 = Add(r3, b3, ref c14);
++        r4 = Add(r4, b4, ref c14);
++        r5 = Add(r5, b5, ref c14);
++        total += c14;
++        ulong c15 = 0;
++        r0 = Add(r0, b0, ref c15);
++        r1 = Add(r1, b1, ref c15);
++        r2 = Add(r2, b2, ref c15);
++        r3 = Add(r3, b3, ref c15);
++        r4 = Add(r4, b4, ref c15);
++        r5 = Add(r5, b5, ref c15);
++        total += c15;
++        result[0] = r0; result[1] = r1; result[2] = r2; result[3] = r3; result[4] = r4; result[5] = r5;
++        return total;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong SubRows(ulong[] a, ulong[] b, ulong[] result)
++    {
++        ulong r0 = a[0], r1 = a[1], r2 = a[2], r3 = a[3], r4 = a[4], r5 = a[5];
++        ulong b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3], b4 = b[4], b5 = b[5];
++        ulong total = 0;
++        ulong c0 = 0;
++        r0 = Sub(r0, b0, ref c0);
++        r1 = Sub(r1, b1, ref c0);
++        r2 = Sub(r2, b2, ref c0);
++        r3 = Sub(r3, b3, ref c0);
++        r4 = Sub(r4, b4, ref c0);
++        r5 = Sub(r5, b5, ref c0);
++        total += c0;
++        ulong c1 = 0;
++        r0 = Sub(r0, b0, ref c1);
++        r1 = Sub(r1, b1, ref c1);
++        r2 = Sub(r2, b2, ref c1);
++        r3 = Sub(r3, b3, ref c1);
++        r4 = Sub(r4, b4, ref c1);
++        r5 = Sub(r5, b5, ref c1);
++        total += c1;
++        ulong c2 = 0;
++        r0 = Sub(r0, b0, ref c2);
++        r1 = Sub(r1, b1, ref c2);
++        r2 = Sub(r2, b2, ref c2);
++        r3 = Sub(r3, b3, ref c2);
++        r4 = Sub(r4, b4, ref c2);
++        r5 = Sub(r5, b5, ref c2);
++        total += c2;
++        ulong c3 = 0;
++        r0 = Sub(r0, b0, ref c3);
++        r1 = Sub(r1, b1, ref c3);
++        r2 = Sub(r2, b2, ref c3);
++        r3 = Sub(r3, b3, ref c3);
++        r4 = Sub(r4, b4, ref c3);
++        r5 = Sub(r5, b5, ref c3);
++        total += c3;
++        ulong c4 = 0;
++        r0 = Sub(r0, b0, ref c4);
++        r1 = Sub(r1, b1, ref c4);
++        r2 = Sub(r2, b2, ref c4);
++        r3 = Sub(r3, b3, ref c4);
++        r4 = Sub(r4, b4, ref c4);
++        r5 = Sub(r5, b5, ref c4);
++        total += c4;
++        ulong c5 = 0;
++        r0 = Sub(r0, b0, ref c5);
++        r1 = Sub(r1, b1, ref c5);
++        r2 = Sub(r2, b2, ref c5);
++        r3 = Sub(r3, b3, ref c5);
++        r4 = Sub(r4, b4, ref c5);
++        r5 = Sub(r5, b5, ref c5);
++        total += c5;
++        ulong c6 = 0;
++        r0 = Sub(r0, b0, ref c6);
++        r1 = Sub(r1, b1, ref c6);
++        r2 = Sub(r2, b2, ref c6);
++        r3 = Sub(r3, b3, ref c6);
++        r4 = Sub(r4, b4, ref c6);
++        r5 = Sub(r5, b5, ref c6);
++        total += c6;
++        ulong c7 = 0;
++        r0 = Sub(r0, b0, ref c7);
++        r1 = Sub(r1, b1, ref c7);
++        r2 = Sub(r2, b2, ref c7);
++        r3 = Sub(r3, b3, ref c7);
++        r4 = Sub(r4, b4, ref c7);
++        r5 = Sub(r5, b5, ref c7);
++        total += c7;
++        ulong c8 = 0;
++        r0 = Sub(r0, b0, ref c8);
++        r1 = Sub(r1, b1, ref c8);
++        r2 = Sub(r2, b2, ref c8);
++        r3 = Sub(r3, b3, ref c8);
++        r4 = Sub(r4, b4, ref c8);
++        r5 = Sub(r5, b5, ref c8);
++        total += c8;
++        ulong c9 = 0;
++        r0 = Sub(r0, b0, ref c9);
++        r1 = Sub(r1, b1, ref c9);
++        r2 = Sub(r2, b2, ref c9);
++        r3 = Sub(r3, b3, ref c9);
++        r4 = Sub(r4, b4, ref c9);
++        r5 = Sub(r5, b5, ref c9);
++        total += c9;
++        ulong c10 = 0;
++        r0 = Sub(r0, b0, ref c10);
++        r1 = Sub(r1, b1, ref c10);
++        r2 = Sub(r2, b2, ref c10);
++        r3 = Sub(r3, b3, ref c10);
++        r4 = Sub(r4, b4, ref c10);
++        r5 = Sub(r5, b5, ref c10);
++        total += c10;
++        ulong c11 = 0;
++        r0 = Sub(r0, b0, ref c11);
++        r1 = Sub(r1, b1, ref c11);
++        r2 = Sub(r2, b2, ref c11);
++        r3 = Sub(r3, b3, ref c11);
++        r4 = Sub(r4, b4, ref c11);
++        r5 = Sub(r5, b5, ref c11);
++        total += c11;
++        ulong c12 = 0;
++        r0 = Sub(r0, b0, ref c12);
++        r1 = Sub(r1, b1, ref c12);
++        r2 = Sub(r2, b2, ref c12);
++        r3 = Sub(r3, b3, ref c12);
++        r4 = Sub(r4, b4, ref c12);
++        r5 = Sub(r5, b5, ref c12);
++        total += c12;
++        ulong c13 = 0;
++        r0 = Sub(r0, b0, ref c13);
++        r1 = Sub(r1, b1, ref c13);
++        r2 = Sub(r2, b2, ref c13);
++        r3 = Sub(r3, b3, ref c13);
++        r4 = Sub(r4, b4, ref c13);
++        r5 = Sub(r5, b5, ref c13);
++        total += c13;
++        ulong c14 = 0;
++        r0 = Sub(r0, b0, ref c14);
++        r1 = Sub(r1, b1, ref c14);
++        r2 = Sub(r2, b2, ref c14);
++        r3 = Sub(r3, b3, ref c14);
++        r4 = Sub(r4, b4, ref c14);
++        r5 = Sub(r5, b5, ref c14);
++        total += c14;
++        ulong c15 = 0;
++        r0 = Sub(r0, b0, ref c15);
++        r1 = Sub(r1, b1, ref c15);
++        r2 = Sub(r2, b2, ref c15);
++        r3 = Sub(r3, b3, ref c15);
++        r4 = Sub(r4, b4, ref c15);
++        r5 = Sub(r5, b5, ref c15);
++        total += c15;
++        result[0] = r0; result[1] = r1; result[2] = r2; result[3] = r3; result[4] = r4; result[5] = r5;
++        return total;
++    }
++
++    [Fact]
++    public static int TestEntryPoint()
++    {
++        var rng = new Random(97531);
++        ulong[] a = new ulong[6], b = new ulong[6], result = new ulong[6];
++        BigInteger radix = BigInteger.One << 384;
++        for (int sample = 0; sample < 2000; sample++)
++        {
++            rng.NextBytes(MemoryMarshal.AsBytes(a.AsSpan()));
++            rng.NextBytes(MemoryMarshal.AsBytes(b.AsSpan()));
++            if (sample < 4)
++            {
++                Array.Fill(a, (sample & 1) == 0 ? 0UL : ulong.MaxValue);
++                Array.Fill(b, (sample & 2) == 0 ? 0UL : ulong.MaxValue);
++            }
++            BigInteger av = new BigInteger(MemoryMarshal.AsBytes(a.AsSpan()), true);
++            BigInteger bv = new BigInteger(MemoryMarshal.AsBytes(b.AsSpan()), true);
++            BigInteger expected = av + 16 * bv;
++            ulong carries = AddRows(a, b, result);
++            BigInteger actual = new BigInteger(MemoryMarshal.AsBytes(result.AsSpan()), true);
++            if (actual != expected % radix || carries != (ulong)(expected / radix)) return 101;
++            expected = av - 16 * bv;
++            ulong borrows = SubRows(a, b, result);
++            actual = new BigInteger(MemoryMarshal.AsBytes(result.AsSpan()), true);
++            BigInteger normalized = (expected % radix + radix) % radix;
++            if (actual != normalized || borrows != (ulong)((normalized - expected) / radix)) return 102;
++            // Overlapping output with an input must retain the entry values.
++            ulong[] alias = (ulong[])a.Clone();
++            if (AddRows(alias, b, alias) != carries ||
++                new BigInteger(MemoryMarshal.AsBytes(alias.AsSpan()), true) != (av + 16 * bv) % radix) return 103;
++        }
++        return 100;
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/CompositeCarry.csproj b/src/tests/JIT/opt/Add/CompositeCarry.csproj
+new file mode 100644
+index 00000000..e5ffd8ee
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/CompositeCarry.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="CompositeCarry.cs" />
 +    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
 +    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
 +  </ItemGroup>
@@ -2098,6 +2706,194 @@ index 00000000..7d9262de
 +  </PropertyGroup>
 +  <ItemGroup>
 +    <Compile Include="MulxMultiplierCopies.cs" />
++    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
++    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
++  </ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/ScalarProductCarry.cs b/src/tests/JIT/opt/Add/ScalarProductCarry.cs
+new file mode 100644
+index 00000000..96077599
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/ScalarProductCarry.cs
+@@ -0,0 +1,164 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using System.Runtime.InteropServices;
++using Xunit;
++
++// Unsigned scalar products can use MULX between carry limbs. Signed products
++// must retain their signed semantics. A doubled final operand may move only
++// when its local inputs are independent of the flags producer.
++public class ScalarProductCarryTests
++{
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Add(ulong a, ulong b, ref ulong carry)
++    {
++        ulong s = a + b, c = s < a ? 1UL : 0UL;
++        ulong r = s + carry;
++        carry = c + (r < s ? 1UL : 0UL);
++        return r;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong UnsignedProducts(ulong[] a, ulong[] x, ulong[] result)
++    {
++        ulong a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3], a4 = a[4], a5 = a[5], a6 = a[6], a7 = a[7], a8 = a[8], a9 = a[9], a10 = a[10], a11 = a[11], a12 = a[12];
++        ulong x0 = x[0], x1 = x[1], x2 = x[2], x3 = x[3], x4 = x[4], x5 = x[5];
++        ulong carry = 0;
++        ulong r0 = Add(a0, x0, ref carry);
++        ulong high0 = Math.BigMul(x0, x0, out ulong low0);
++        ulong r1 = Add(a1, low0, ref carry);
++        ulong r2 = Add(a2, high0, ref carry);
++        ulong high1 = Math.BigMul(x1, x1, out ulong low1);
++        ulong r3 = Add(a3, low1, ref carry);
++        ulong r4 = Add(a4, high1, ref carry);
++        ulong high2 = Math.BigMul(x2, x2, out ulong low2);
++        ulong r5 = Add(a5, low2, ref carry);
++        ulong r6 = Add(a6, high2, ref carry);
++        ulong high3 = Math.BigMul(x3, x3, out ulong low3);
++        ulong r7 = Add(a7, low3, ref carry);
++        ulong r8 = Add(a8, high3, ref carry);
++        ulong high4 = Math.BigMul(x4, x4, out ulong low4);
++        ulong r9 = Add(a9, low4, ref carry);
++        ulong r10 = Add(a10, high4, ref carry);
++        ulong high5 = Math.BigMul(x5, x5, out ulong low5);
++        ulong r11 = Add(a11, low5, ref carry);
++        ulong r12 = Add(a12, high5, ref carry);
++        result[0] = r0; result[1] = r1; result[2] = r2; result[3] = r3; result[4] = r4; result[5] = r5; result[6] = r6; result[7] = r7; result[8] = r8; result[9] = r9; result[10] = r10; result[11] = r11; result[12] = r12;
++        return carry;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong SignedProducts(ulong[] a, ulong[] x, ulong[] result)
++    {
++        ulong a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3], a4 = a[4], a5 = a[5], a6 = a[6];
++        ulong x0 = x[0], x1 = x[1], x2 = x[2], x3 = x[3], x4 = x[4], x5 = x[5];
++        ulong carry = 0;
++        ulong r0 = Add(a0, x0, ref carry);
++        long signedHigh0 = Math.BigMul((long)x0, (long)x1, out long signedLow0);
++        ulong high0 = (ulong)signedHigh0, low0 = (ulong)signedLow0;
++        ulong r1 = Add(a1, low0, ref carry);
++        ulong r2 = Add(a2, high0, ref carry);
++        long signedHigh1 = Math.BigMul((long)x2, (long)x3, out long signedLow1);
++        ulong high1 = (ulong)signedHigh1, low1 = (ulong)signedLow1;
++        ulong r3 = Add(a3, low1, ref carry);
++        ulong r4 = Add(a4, high1, ref carry);
++        long signedHigh2 = Math.BigMul((long)x4, (long)x5, out long signedLow2);
++        ulong high2 = (ulong)signedHigh2, low2 = (ulong)signedLow2;
++        ulong r5 = Add(a5, low2, ref carry);
++        ulong r6 = Add(a6, high2, ref carry);
++        result[0] = r0; result[1] = r1; result[2] = r2; result[3] = r3; result[4] = r4; result[5] = r5; result[6] = r6;
++        return carry;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong IndependentDouble(ulong a, ulong b, ulong tail, out ulong first)
++    {
++        ulong sum = a + b;
++        ulong carry = sum < a ? (ulong)1 : 0;
++        first = sum;
++        return tail + tail + carry;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint IndependentDouble32(uint a, uint b, uint tail, out uint first)
++    {
++        uint sum = a + b;
++        uint carry = sum < a ? (uint)1 : 0;
++        first = sum;
++        return tail + tail + carry;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong DependentDouble(ulong a, ulong b, ulong tail, out ulong first)
++    {
++        ulong sum = a + b;
++        ulong carry = sum < a ? (ulong)1 : 0;
++        first = sum;
++        return sum + sum + carry;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint DependentDouble32(uint a, uint b, uint tail, out uint first)
++    {
++        uint sum = a + b;
++        uint carry = sum < a ? (uint)1 : 0;
++        first = sum;
++        return sum + sum + carry;
++    }
++
++    private static BigInteger Raw(ulong[] x, int words) =>
++        new BigInteger(MemoryMarshal.AsBytes(x.AsSpan(0, words)), true);
++
++    [Fact]
++    public static int TestEntryPoint()
++    {
++        var rng = new Random(13579);
++        ulong[] a = new ulong[13], x = new ulong[13], result = new ulong[13];
++        BigInteger productMask = (BigInteger.One << 128) - 1;
++        for (int sample = 0; sample < 2000; sample++)
++        {
++            rng.NextBytes(MemoryMarshal.AsBytes(a.AsSpan()));
++            rng.NextBytes(MemoryMarshal.AsBytes(x.AsSpan()));
++            if (sample < 4)
++            {
++                Array.Fill(a, (sample & 1) == 0 ? 0UL : ulong.MaxValue);
++                Array.Fill(x, (sample & 2) == 0 ? 0UL : ulong.MaxValue);
++            }
++            if (sample == 4) { Array.Fill(a, ulong.MaxValue); Array.Fill(x, 1UL << 63); }
++            for (int sign = 0; sign < 2; sign++)
++            {
++                int count = sign == 0 ? 6 : 3, words = 1 + 2 * count;
++                BigInteger radix = BigInteger.One << (64 * words);
++                BigInteger expected = Raw(a, words) + x[0];
++                for (int i = 0; i < count; i++)
++                {
++                    BigInteger product = sign == 0 ? (BigInteger)x[i] * x[i]
++                        : ((BigInteger)(long)x[2*i] * (long)x[2*i+1]) & productMask;
++                    expected += product << (64 * (1 + 2*i));
++                }
++                ulong carry = sign == 0 ? UnsignedProducts(a, x, result) : SignedProducts(a, x, result);
++                if (Raw(result, words) != expected % radix || carry != (ulong)(expected / radix)) return 101 + sign;
++                ulong[] alias = (ulong[])a.Clone();
++                ulong aliasCarry = sign == 0 ? UnsignedProducts(alias, x, alias) : SignedProducts(alias, x, alias);
++                if (aliasCarry != carry || Raw(alias, words) != expected % radix) return 103 + sign;
++                alias = (ulong[])x.Clone();
++                aliasCarry = sign == 0 ? UnsignedProducts(a, alias, alias) : SignedProducts(a, alias, alias);
++                if (aliasCarry != carry || Raw(alias, words) != expected % radix) return 105 + sign;
++            }
++            BigInteger sum = (BigInteger)a[0] + x[0], mask = (BigInteger.One << 64) - 1;
++            ulong independent = IndependentDouble(a[0], x[0], a[1], out ulong first);
++            if (first != (ulong)(sum & mask) || independent != (ulong)((2 * (BigInteger)a[1] + (sum >> 64)) & mask)) return 107;
++            ulong dependent = DependentDouble(a[0], x[0], a[1], out first);
++            if (first != (ulong)(sum & mask) || dependent != (ulong)((2 * (sum & mask) + (sum >> 64)) & mask)) return 108;
++            sum = (BigInteger)(uint)a[0] + (uint)x[0]; mask = (BigInteger.One << 32) - 1;
++            uint independent32 = IndependentDouble32((uint)a[0], (uint)x[0], (uint)a[1], out uint first32);
++            if (first32 != (uint)(sum & mask) || independent32 != (uint)((2 * (BigInteger)(uint)a[1] + (sum >> 32)) & mask)) return 109;
++            uint dependent32 = DependentDouble32((uint)a[0], (uint)x[0], (uint)a[1], out first32);
++            if (first32 != (uint)(sum & mask) || dependent32 != (uint)((2 * (sum & mask) + (sum >> 32)) & mask)) return 110;
++        }
++        return 100;
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/ScalarProductCarry.csproj b/src/tests/JIT/opt/Add/ScalarProductCarry.csproj
+new file mode 100644
+index 00000000..7b237f80
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/ScalarProductCarry.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="ScalarProductCarry.cs" />
 +    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
 +    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
 +  </ItemGroup>

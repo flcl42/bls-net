@@ -31,6 +31,7 @@ internal static unsafe partial class Program
         if (NativeAvailable) NativeLibrary.SetDllImportResolver(Assembly.GetExecutingAssembly(), (name, _, _) => name == "blst" ? handle : 0);
         Console.WriteLine(RuntimeInformation.FrameworkDescription);
         if (args.Contains("--kernel-cold-start")) { ColdKernelStart(); return; }
+        if (args.Contains("--square-cold-start")) { ColdSquareStart(); return; }
         Console.WriteLine($"Field kernels: {(Fp.UseExpandedKernels ? "expanded" : "compact")}");
         if (args.Contains("--kernel-policy")) { KernelPolicyDiagnostics(); return; }
         if (args.Contains("--kernel-timing")) { KernelTimings(); return; }
@@ -43,6 +44,27 @@ internal static unsafe partial class Program
         if (NativeAvailable) TowerTests();
         PairingTests();
         Console.WriteLine($"Passed {_checks:N0} checks.");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ColdSquareStart()
+    {
+        // Construct raw Montgomery data without touching any Fp static first.
+        Span<byte> bytes = stackalloc byte[Fp.ByteCount];
+        bytes.Clear(); bytes[0] = 3;
+        Fp value = MemoryMarshal.Read<Fp>(bytes);
+        Fp.Square(out Fp result, value);
+        RInverse = BigInteger.ModPow(R % P, P - 2, P);
+        CheckReduced(result, 9 * RInverse, "cold Fp square");
+        Fp.Square(out value, value);
+        Check(Fp.AreEqual(value, result), "cold Fp square alias");
+        if (NativeAvailable)
+        {
+            Fp original = MemoryMarshal.Read<Fp>(bytes);
+            KernelNative.blst_fp_sqr(out Fp native, original);
+            Check(Fp.AreEqual(result, native), "cold Fp square native");
+        }
+        Console.WriteLine($"Passed {_checks} cold square checks; field kernels: {(Fp.UseExpandedKernels ? "expanded" : "compact")}.");
     }
 
     // An ordinary tiered caller, for checking readonly-field folding in Tier1.
@@ -327,6 +349,8 @@ internal static unsafe partial class Program
         Console.WriteLine("Operation | managed ns | native ns | managed bytes");
         for (int op = quick ? 2 : 0; op < names.Length; op++)
         {
+            string? filter = Environment.GetEnvironmentVariable("BLST_BENCH_FILTER");
+            if (filter is not null && !names[op].Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
             int iterations = op <= 4 || op >= 11 ? (quick ? 5000 : 30000) : (quick ? 60 : 250);
             if (Environment.GetEnvironmentVariable("BLST_BENCH_ROUND_MS") is not null)
                 iterations = op <= 4 || op >= 11 ? 1000 : 10;

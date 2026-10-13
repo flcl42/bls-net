@@ -156,6 +156,97 @@ public readonly partial struct Fp
         result = r;
     }
 
+    // The output must be disjoint from both inputs. Composite products use
+    // independent scratch buffers, so their low words can go directly there.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void MultiplyWideNoAlias(out FpWide result, in Fp a, in Fp b)
+    {
+        if (UseExpandedKernels) MultiplyWideNoAliasExpanded(out result, a, b);
+        else MultiplyWideCompact(out result, a, b);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void MultiplyWideNoAliasExpanded(out FpWide result, in Fp a, in Fp b)
+    {
+        Unsafe.SkipInit(out result);
+        ref ulong br = ref Unsafe.As<Fp, ulong>(ref Unsafe.AsRef(in b));
+        ref ulong rr = ref result.L0;
+        ulong a0 = a._l0;
+        ulong a1 = a._l1;
+        ulong a2 = a._l2;
+        ulong a3 = a._l3;
+        ulong a4 = a._l4;
+        ulong a5 = a._l5;
+        ulong t0 = 0;
+        ulong t1 = 0;
+        ulong t2 = 0;
+        ulong t3 = 0;
+        ulong t4 = 0;
+        ulong t5 = 0;
+        ulong row = Unsafe.Add(ref br, 0);
+        ulong carry = MulAdd(row, a0, t0, 0, out ulong low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 0) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 1);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 1) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 2);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 2) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 3);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 3) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 4);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 4) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 5);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 5) = low;
+        t5 = carry;
+
+        result.L6 = t0;
+        result.L7 = t1;
+        result.L8 = t2;
+        result.L9 = t3;
+        result.L10 = t4;
+        result.L11 = t5;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ReduceWideCore(out Fp result, in FpWide value)
     {

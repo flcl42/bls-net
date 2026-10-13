@@ -82,6 +82,8 @@ internal static unsafe partial class Program
             Fp.AddUnreduced(out Fp twiceB, b, b);
             Fp.MultiplyWide(out FpWide wideTwice, twiceA, twiceB);
             Check(Signed(wideTwice) == Raw(a) * Raw(b) * 4, "wide unreduced product vs BigInteger");
+            Fp.MultiplyWideNoAlias(out FpWide directTwice, twiceA, twiceB);
+            Check(Signed(directTwice) == Raw(a) * Raw(b) * 4, "disjoint unreduced product bound");
             Fp.ReduceWide(out Fp wideReduced, wideTwice);
             CheckReduced(wideReduced, Raw(a) * Raw(b) * 4 * RInverse, "wide unreduced product reduction");
             Fp.MultiplyComposite(out Fp product, twiceA, twiceB);
@@ -135,6 +137,9 @@ internal static unsafe partial class Program
     private static void TestKernelPair(in Fp a, in Fp b, BigInteger x, BigInteger y)
     {
         Fp.MultiplyWide(out FpWide wide, a, b); Check(Signed(wide) == x * y, "wide product vs BigInteger");
+        Fp.MultiplyWideNoAlias(out FpWide direct, a, b);
+        Check(Signed(direct) == x * y, "disjoint wide product vs BigInteger");
+        Check(Raw(a) == x && Raw(b) == y, "disjoint wide product inputs intact");
         FpWide overlap = default;
         Unsafe.As<FpWide, Fp>(ref overlap) = a;
         Fp.MultiplyWide(out overlap, Unsafe.As<FpWide, Fp>(ref overlap), b);
@@ -159,6 +164,8 @@ internal static unsafe partial class Program
         CheckReduced(result, x * y * RInverse, "wide reducer vs BigInteger");
         if (NativeAvailable) { Native.blst_fp_mul(out Fp native, a, b); Check(Fp.AreEqual(result, native), "wide product and reducer vs native"); }
         Fp.MultiplyWide(out wide, a, a); Check(Signed(wide) == x * x, "wide square product");
+        Fp.MultiplyWideNoAlias(out direct, a, a);
+        Check(Signed(direct) == x * x, "disjoint product with identical inputs");
         Fp.AddUnreduced(out Fp sum, a, b); Check(Raw(sum) == x + y, "unreduced sum");
         Fp alias = a; Fp.AddUnreduced(out alias, alias, b); Check(Raw(alias) == x + y, "unreduced sum left alias");
         alias = b; Fp.AddUnreduced(out alias, a, alias); Check(Raw(alias) == x + y, "unreduced sum right alias");

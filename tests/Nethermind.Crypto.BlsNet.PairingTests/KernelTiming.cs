@@ -15,7 +15,7 @@ internal static unsafe partial class Program
         Fp2 a = Field2(), b = Field2();
         string[] names = ["Fp multiply", "Fp square", "Fp2 multiply", "Fp2 square", "Fp inverse",
             "MultiplyWide", "ReduceWide", "ReduceWideSmall", "AddWide", "SubtractWide", "AddUnreduced", "Halve", "Negate", "SubtractSumComposite",
-            "Fp add", "Fp subtract", "MultiplyComposite", "ReduceWidePositive", "ReduceWideDifference"];
+            "Fp add", "Fp subtract", "MultiplyComposite", "ReduceWidePositive", "ReduceWideDifference", "Fp2 add", "Fp2 subtract", "Fp2 mul by 3", "Fp2 mul by 4", "Fp2 mul by 8", "MultiplyWideNoAlias"];
         Fp.MultiplyWide(out FpWide x, a.C0, b.C0);
         Fp.MultiplyWide(out FpWide y, a.C1, b.C1);
         Console.WriteLine("Operation | managed ns | blst ns | managed bytes");
@@ -23,10 +23,10 @@ internal static unsafe partial class Program
         {
             string? filter = Environment.GetEnvironmentVariable("KERNEL_FILTER");
             if (filter is not null && !names[op].Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
-            if (op == 17 && Environment.GetEnvironmentVariable("SKIP_NEW_KERNELS") == "1") continue;
+            if ((op == 17 || op == 24) && Environment.GetEnvironmentVariable("SKIP_NEW_KERNELS") == "1") continue;
             int count = op == 4 ? 30000 : 1000000;
             double managed = MeasureKernel(op, false, count, a, b, x, y, out long allocated);
-            double native = NativeAvailable && (op < 5 || op is 12 or 14 or 15 or 16) ? MeasureKernel(op, true, count, a, b, x, y, out _) : double.NaN;
+            double native = NativeAvailable && (op < 5 || op is 12 or 14 or 15 or 16 or 19 or 20 or 21 or 22 or 23) ? MeasureKernel(op, true, count, a, b, x, y, out _) : double.NaN;
             Console.WriteLine($"{names[op]} | {managed:F2} | {native:F2} | {allocated}");
         }
     }
@@ -67,6 +67,11 @@ internal static unsafe partial class Program
                 case 14: for (int i = 0; i < count; i++) KernelNative.blst_fp_add(out r, a.C0, b.C0); break;
                 case 15: for (int i = 0; i < count; i++) KernelNative.blst_fp_sub(out r, a.C0, b.C0); break;
                 case 16: for (int i = 0; i < count; i++) KernelNative.blst_fp_mul(out r, a.C0, b.C0); break;
+                case 19: for (int i = 0; i < count; i++) KernelNative.blst_fp2_add(out r2, a, b); break;
+                case 20: for (int i = 0; i < count; i++) KernelNative.blst_fp2_sub(out r2, a, b); break;
+                case 21: for (int i = 0; i < count; i++) KernelNative.blst_fp2_mul_by_3(out r2, a); break;
+                case 22: for (int i = 0; i < count; i++) KernelNative.blst_fp2_lshift(out r2, a, 2); break;
+                case 23: for (int i = 0; i < count; i++) KernelNative.blst_fp2_mul_by_8(out r2, a); break;
             }
         }
         else
@@ -92,6 +97,12 @@ internal static unsafe partial class Program
                 case 16: for (int i = 0; i < count; i++) Fp.MultiplyComposite(out r, a.C0, b.C0); break;
                 case 17: RunPositiveKernel(count, x, out r); break;
                 case 18: RunDifferenceKernel(count, x, y, out r); break;
+                case 19: for (int i = 0; i < count; i++) Fp2.Add(out r2, a, b); break;
+                case 20: for (int i = 0; i < count; i++) Fp2.Subtract(out r2, a, b); break;
+                case 21: for (int i = 0; i < count; i++) Fp2.MulBy3(out r2, a); break;
+                case 22: for (int i = 0; i < count; i++) Fp2.MulBy4(out r2, a); break;
+                case 23: for (int i = 0; i < count; i++) Fp2.MulBy8(out r2, a); break;
+                case 24: RunDisjointKernel(count, a.C0, b.C0, out wide); break;
             }
         }
         _fpSink = r; _fp2Sink = r2; _wideSink = wide;
@@ -127,8 +138,20 @@ internal static unsafe partial class Program
         for (int i = 0; i < count; i++) Fp.ReduceWideDifference(out r, x, y);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void RunDisjointKernel(int count, in Fp a, in Fp b, out FpWide r)
+    {
+        r = default;
+        for (int i = 0; i < count; i++) Fp.MultiplyWideNoAlias(out r, a, b);
+    }
+
     private static class KernelNative
     {
+        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_add(out Fp2 r, in Fp2 a, in Fp2 b);
+        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_sub(out Fp2 r, in Fp2 a, in Fp2 b);
+        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_mul_by_3(out Fp2 r, in Fp2 a);
+        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_mul_by_8(out Fp2 r, in Fp2 a);
+        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_lshift(out Fp2 r, in Fp2 a, nuint count);
         [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp_mul(out Fp r, in Fp a, in Fp b);
         [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp_sqr(out Fp r, in Fp a);
         [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_mul(out Fp2 r, in Fp2 a, in Fp2 b);

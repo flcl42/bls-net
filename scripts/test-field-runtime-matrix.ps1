@@ -30,7 +30,7 @@ try {
     # Keep every build and process sequential, including the timing sweeps.
     if (!$SkipBuild) {
         foreach ($framework in @("net10.0", "net11.0")) {
-            & $SdkDotnet build (Join-Path $repo "Nethermind.Crypto.BlsNet.slnx") -c Release "-p:BlsNetTestTargetFramework=$framework" |
+            & $SdkDotnet build (Join-Path $repo "Nethermind.Crypto.BlsNet.slnx") -c Release -m:1 -nodeReuse:false "-p:BlsNetTestTargetFramework=$framework" |
                 Tee-Object -FilePath (Join-Path $output "build-$framework.txt")
             if ($LASTEXITCODE -ne 0) { throw "Build failed for $framework" }
         }
@@ -48,6 +48,8 @@ try {
                     if ($suite -eq "PairingTests") {
                         & $runtimeCase.Dotnet $assembly --kernel-cold-start | Tee-Object -FilePath (Join-Path $output "$prefix-cold-start.txt")
                         if ($LASTEXITCODE -ne 0) { throw "$prefix cold-start tests failed" }
+                        & $runtimeCase.Dotnet $assembly --square-cold-start | Tee-Object -FilePath (Join-Path $output "$prefix-cold-square.txt")
+                        if ($LASTEXITCODE -ne 0) { throw "$prefix cold square tests failed" }
                         & $runtimeCase.Dotnet $assembly --kernel-tests | Tee-Object -FilePath (Join-Path $output "$prefix-kernels.txt")
                         if ($LASTEXITCODE -ne 0) { throw "$prefix kernel tests failed" }
                         if ($Timings) {
