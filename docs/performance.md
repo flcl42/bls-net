@@ -1,5 +1,9 @@
 # Performance
 
+The subsequent [algorithm-layer follow-up](agentG-report.md) records three-runtime before/after measurements, native Fp6 timings, full MSM sweeps, integration profiles, local commits and validation. It includes compressed final-exponentiation powers, an early return when the easy part yields one, and endomorphism-derived multiplication/MSM tables. The [operation-count audit](algorithm-audit.md) explains both the gains and the remaining gaps. The historical measurements below are retained as their original captures.
+
+The follow-up uses Agent F's final shared JIT update for both patched baseline and final captures, with Fp/Fp2 source changes still unmerged. General final exponentiation improves by about 9%, G2 multiplication by about 29%, and all sampled patched MSM sizes beat their same-process native timings. General pairing and maps still retain gaps; the full report distinguishes those paths from repeated-point MSMs and cancelling-pair precompile inputs.
+
 On stock .NET 10, the managed EIP-2537 precompiles are about 1.8–4× slower than blst. With the experimental carry-aware JIT, G1 operations take 0.83–1.02× blst's time, G2 addition 0.81×, G2 MSM about 1.00–1.12×, maps 1.06–1.12× and pairing checks 1.15–1.19×. Most operations reach or approach parity; pairing retains a 15–19% gap. Ratios are managed time divided by blst time, so lower is faster.
 
 The main gap is carry handling. In the latest field-kernel measurements, stock RyuJIT emits MULX but materializes carry bits with comparisons, `setb` and `movzx` rather than retaining ADC/ADCX/ADOX chains. The carry-aware patch preserves these chains and flag-based reductions. An Fp multiply falls from about 53 ns on stock .NET 10/11 to about 20 ns, close to native ADX blst. Large formulas also need compact arithmetic calls to avoid JIT budgets and register pressure.
@@ -159,12 +163,14 @@ Use the .NET 11 SDK selected by `global.json`:
 
 ```powershell
 dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release
-dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -- --bench
-dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -- --timing
-dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -- --kernel-timing
+dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -f net11.0 -- --bench
+dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0 -- --timing
+dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0 -- --kernel-timing
 ```
 
 The test projects default to net11.0. Build the net10.0 runners with `dotnet build Nethermind.Crypto.BlsNet.slnx -c Release -p:BlsNetTestTargetFramework=net10.0`; changing only the launcher does not retarget the assembly. `scripts/test-field-runtime-matrix.ps1` builds both targets and runs all three suites, kernel tests and optional timing sweeps sequentially, with both kernel modes on every compatible runtime. Native comparisons require the optional reference build described in the [README](../README.md#build-and-test). Without it, managed timings still run and native columns are skipped.
+
+On a shared Windows host, `BLST_BENCH_PROCESSOR` optionally pins the runners to one logical processor. `BLST_BENCH_ROUND_MS` enables shorter arithmetic/curve rounds and best-of-21 sampling to reduce scheduler interruptions; default runner settings retain the historical best-of-seven mode. Curve rounds adapt their iteration count toward the supplied millisecond duration. Pairing short rounds use 1,000 tower iterations and 10 pairing iterations, with the same counts for native and managed operations. Warmup remains at least 0.5 seconds per operation.
 
 ## Kernel and JIT details
 

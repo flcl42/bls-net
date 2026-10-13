@@ -134,8 +134,9 @@ final dispatch retains the useful sizes only.
 This clone does not achieve universal blst parity. Pairing's remaining gap
 tracks wide Fp2 kernel/correction traffic, early Fp4/Fp6 reductions and point
 doubling costs. Stock .NET still materializes carry chains. Agent F's reserved
-Fp/Fp2/JIT files were not edited, and its eventual changes are not included in
-the reported measurements. A fused wide Fp2 square/product helper is the next
+Fp/Fp2/JIT files were not edited. Its Fp/Fp2 source changes are not included in
+the reported measurements; its final update to the shared JIT is included in
+both patched baseline and final captures. A fused wide Fp2 square/product helper is the next
 place to revisit the rejected widened Fp4 implementation. Further hard-part
 chain or torus changes need an independently verified exponent and a measured
 benefit, not just a lower abstract multiplication count.
