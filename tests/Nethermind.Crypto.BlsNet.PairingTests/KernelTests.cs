@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
@@ -47,10 +48,21 @@ internal static unsafe partial class Program
             FpWide x = Wide(edge);
             Fp.ReduceWide(out Fp reduced, x);
             CheckReduced(reduced, edge * RInverse, "wide reducer signed bound edge");
+            FpWide aliasWide = x;
+            Fp.ReduceWide(out Unsafe.As<FpWide, Fp>(ref aliasWide), aliasWide);
+            CheckReduced(Unsafe.As<FpWide, Fp>(ref aliasWide), edge * RInverse, "wide reducer overlapping output");
             if (BigInteger.Abs(edge) < P * R)
             {
                 Fp.ReduceWideSmall(out reduced, x);
                 CheckReduced(reduced, edge * RInverse, "small reducer signed bound edge");
+                if (edge.Sign >= 0)
+                {
+                    Fp.ReduceWidePositive(out reduced, x);
+                    CheckReduced(reduced, edge * RInverse, "positive reducer bound edge");
+                    aliasWide = x;
+                    Fp.ReduceWidePositive(out Unsafe.As<FpWide, Fp>(ref aliasWide), aliasWide);
+                    CheckReduced(Unsafe.As<FpWide, Fp>(ref aliasWide), edge * RInverse, "positive reducer overlapping output");
+                }
             }
         }
         BigInteger[] rawEdges = [0, 1, 2, P / 2, P - 2, P - 1];
@@ -58,7 +70,8 @@ internal static unsafe partial class Program
         {
             Fp a = RawField(x), b = RawField(y);
             TestKernelPair(a, b, x, y);
-            TestFp2(new Fp2(a, b), new Fp2(b, a));
+            foreach (BigInteger z in rawEdges) foreach (BigInteger w in rawEdges)
+                TestFp2(new Fp2(a, b), new Fp2(RawField(z), RawField(w)));
         }
         for (int i = 0; i < 10000; i++)
         {
@@ -74,6 +87,12 @@ internal static unsafe partial class Program
             CheckReduced(product, Raw(a) * Raw(b) * 4 * RInverse, "unreduced product bound");
             Fp c = Field(); Fp.SubtractSumComposite(out Fp difference, a, b, c);
             CheckReduced(difference, Raw(a) - Raw(b) - Raw(c), "fused subtraction vs BigInteger");
+            Fp differenceAlias = a; Fp.SubtractSumComposite(out differenceAlias, differenceAlias, b, c);
+            Check(Fp.AreEqual(differenceAlias, difference), "fused subtraction left alias");
+            differenceAlias = b; Fp.SubtractSumComposite(out differenceAlias, a, differenceAlias, c);
+            Check(Fp.AreEqual(differenceAlias, difference), "fused subtraction middle alias");
+            differenceAlias = c; Fp.SubtractSumComposite(out differenceAlias, a, b, differenceAlias);
+            Check(Fp.AreEqual(differenceAlias, difference), "fused subtraction right alias");
             BigInteger x = RandomInteger(96) % (wideBound / 2);
             BigInteger y = RandomInteger(96) % (wideBound / 2);
             if ((i & 1) != 0) x = -x;
@@ -91,6 +110,9 @@ internal static unsafe partial class Program
             if ((i & 1) != 0) middle = -middle;
             FpWide medium = Wide(middle); Fp.ReduceWideSmall(out actual, medium);
             CheckReduced(actual, middle * RInverse, "small reduction vs BigInteger");
+            medium = Wide(BigInteger.Abs(middle));
+            Fp.ReduceWidePositive(out actual, medium);
+            CheckReduced(actual, BigInteger.Abs(middle) * RInverse, "positive reduction vs BigInteger");
             TestFp2(Field2(), Field2());
         }
         Console.WriteLine("Kernels: 10,000 random signed wide/small reductions, raw products, unreduced sums, fused subtraction and Fp2 cases passed.");
@@ -98,11 +120,34 @@ internal static unsafe partial class Program
     private static void TestKernelPair(in Fp a, in Fp b, BigInteger x, BigInteger y)
     {
         Fp.MultiplyWide(out FpWide wide, a, b); Check(Signed(wide) == x * y, "wide product vs BigInteger");
+        FpWide overlap = default;
+        Unsafe.As<FpWide, Fp>(ref overlap) = a;
+        Fp.MultiplyWide(out overlap, Unsafe.As<FpWide, Fp>(ref overlap), b);
+        Check(Signed(overlap) == x * y, "wide product left overlap");
+        Unsafe.As<FpWide, Fp>(ref overlap) = b;
+        Fp.MultiplyWide(out overlap, a, Unsafe.As<FpWide, Fp>(ref overlap));
+        Check(Signed(overlap) == x * y, "wide product right overlap");
+#if !NET10_0
+        Fp.MultiplyWide(out FpWide t1, b, b);
+        Fp.MultiplyWide(out FpWide t2, a, a);
+        FpWide t0 = wide;
+        Fp.SubtractWideProducts(ref t0, t1, ref t2);
+        Check(Signed(t0) == x * y - y * y, "wide Karatsuba real in place");
+        Check(Signed(t2) == x * x - x * y - y * y, "wide Karatsuba imaginary in place");
+        Check(Signed(t1) == y * y, "wide Karatsuba middle intact");
+#endif
         Fp.ReduceWide(out Fp result, wide);
         CheckReduced(result, x * y * RInverse, "wide reducer vs BigInteger");
         if (NativeAvailable) { Native.blst_fp_mul(out Fp native, a, b); Check(Fp.AreEqual(result, native), "wide product and reducer vs native"); }
         Fp.MultiplyWide(out wide, a, a); Check(Signed(wide) == x * x, "wide square product");
         Fp.AddUnreduced(out Fp sum, a, b); Check(Raw(sum) == x + y, "unreduced sum");
+        Fp alias = a; Fp.AddUnreduced(out alias, alias, b); Check(Raw(alias) == x + y, "unreduced sum left alias");
+        alias = b; Fp.AddUnreduced(out alias, a, alias); Check(Raw(alias) == x + y, "unreduced sum right alias");
+        Fp.Square(out Fp square, a); CheckReduced(square, x * x * RInverse, "Fp square BigInteger");
+        if (NativeAvailable) { KernelNative.blst_fp_sqr(out Fp native, a); Check(Fp.AreEqual(square, native), "Fp dedicated native square"); }
+        alias = a; Fp.Square(out alias, alias); Check(Fp.AreEqual(alias, square), "Fp square alias");
+        Fp.Halve(out Fp half, a); CheckReduced(half, (x + (x.IsEven ? 0 : P)) / 2, "Fp halve raw BigInteger");
+        alias = a; Fp.Halve(out alias, alias); Check(Fp.AreEqual(alias, half), "Fp halve alias");
     }
     private static void TestFp2(in Fp2 a, in Fp2 b)
     {
@@ -114,6 +159,8 @@ internal static unsafe partial class Program
         alias = b; Fp2.Multiply(out alias, a, alias); Check(Fp2.AreEqual(alias, product), "Fp2 multiply right alias");
         Fp2.Square(out Fp2 square, a);
         if (NativeAvailable) { Native.blst_fp2_sqr(out native, a); Check(Fp2.AreEqual(square, native), "Fp2 square native"); }
+        CheckReduced(square.C0, (Raw(a.C0) * Raw(a.C0) - Raw(a.C1) * Raw(a.C1)) * RInverse, "Fp2 square real BigInteger");
+        CheckReduced(square.C1, 2 * Raw(a.C0) * Raw(a.C1) * RInverse, "Fp2 square imaginary BigInteger");
         alias = a; Fp2.Square(out alias, alias); Check(Fp2.AreEqual(alias, square), "Fp2 square alias");
         alias = a; Fp2.MultiplyByFp(out alias, alias, alias.C0); Fp2.MultiplyByFp(out native, a, a.C0); Check(Fp2.AreEqual(alias, native), "Fp2 scalar inside result C0 alias");
         alias = a; Fp2.MultiplyByFp(out alias, alias, alias.C1); Fp2.MultiplyByFp(out native, a, a.C1); Check(Fp2.AreEqual(alias, native), "Fp2 scalar inside result C1 alias");

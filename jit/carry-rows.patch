@@ -1,5 +1,5 @@
 diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
-index 5ce80283..771dc49d 100644
+index 5ce80283..4227a271 100644
 --- a/src/coreclr/jit/lower.cpp
 +++ b/src/coreclr/jit/lower.cpp
 @@ -9817,6 +9817,7 @@ void Lowering::AfterLowerBlocks()
@@ -43,7 +43,23 @@ index 5ce80283..771dc49d 100644
          {
              TryLowerMultiplyCarryBackedge();
              hasAdx |= TryLowerMultiplyCarryLoop();
-@@ -14421,6 +14426,859 @@ bool Lowering::TryLowerMultiplyCarryChain()
+@@ -14398,6 +14403,15 @@ bool Lowering::TryLowerMultiplyCarryChain()
+         lane.add[1]->AsOp()->gtOp2 = lane.low;
+         lane.add[0]->ChangeOper(GT_ADCX);
+         lane.add[1]->ChangeOper(GT_ADOX);
++        for (GenTree* add : lane.add)
++        {
++            for (GenTree* operand : add->Operands())
++            {
++                operand->ClearContained();
++                operand->ClearRegOptional();
++            }
++            ContainCheckBinary(add->AsOp());
++        }
+         for (GenTree* adc : lane.adc)
+         {
+             LIR::Use use;
+@@ -14421,6 +14435,903 @@ bool Lowering::TryLowerMultiplyCarryChain()
      return true;
  }
  
@@ -525,10 +541,54 @@ index 5ce80283..771dc49d 100644
 +                node->gtFlags |= GTF_HW_MULX;
 +            }
 +        }
++        // Containment may have swapped the commutative BigMul operands and
++        // put a row constant in RDX. Prefer the invariant multiplier common
++        // to all lanes as MULX's implicit operand, so it stays in RDX.
++        unsigned multiplierLocal = BAD_VAR_NUM;
++        GenTreeHWIntrinsic* firstProduct = lanes[first].product->AsHWIntrinsic();
++        for (unsigned operandIndex = 1; operandIndex <= 2; operandIndex++)
++        {
++            GenTree* operand = firstProduct->Op(operandIndex);
++            if (!operand->OperIs(GT_LCL_VAR) ||
++                m_compiler->lvaGetDesc(operand->AsLclVar()->GetLclNum())->IsAddressExposed() ||
++                !IsInvariantInRange(operand, lanes[last].product))
++            {
++                continue;
++            }
++            unsigned local = operand->AsLclVar()->GetLclNum();
++            bool shared = true;
++            for (size_t i = first + 1; i <= last; i++)
++            {
++                GenTreeHWIntrinsic* product = lanes[i].product->AsHWIntrinsic();
++                bool found = false;
++                for (unsigned j = 1; j <= 2; j++)
++                {
++                    found |= product->Op(j)->OperIs(GT_LCL_VAR) &&
++                             product->Op(j)->AsLclVar()->GetLclNum() == local;
++                }
++                shared &= found;
++            }
++            if (shared)
++            {
++                multiplierLocal = local;
++                break;
++            }
++        }
 +        for (size_t i = first; i <= last; i++)
 +        {
 +            Lane& lane = lanes[i];
 +            lane.product->gtFlags |= GTF_HW_MULX;
++            if (multiplierLocal != BAD_VAR_NUM)
++            {
++                GenTreeHWIntrinsic* product = lane.product->AsHWIntrinsic();
++                if (product->Op(2)->OperIs(GT_LCL_VAR) &&
++                    product->Op(2)->AsLclVar()->GetLclNum() == multiplierLocal)
++                {
++                    std::swap(product->Op(1), product->Op(2));
++                }
++                product->Op(1)->ClearContained();
++                product->Op(1)->ClearRegOptional();
++            }
 +            if (lane.addCount == 0)
 +            {
 +                continue;
@@ -903,7 +963,97 @@ index 5ce80283..771dc49d 100644
  //------------------------------------------------------------------------
  // FindMultiplyCarryStore: Find a local's sole store and sole read in this block.
  // Ordinary intermediates require a preceding store and cannot be live out.
-@@ -15311,6 +16169,61 @@ bool Lowering::LowerFullAdders()
+@@ -14935,6 +15846,17 @@ bool Lowering::TryLowerMultiplyCarryLoop()
+     second->AsOp()->gtOp2 = lowRead;
+     first->ChangeOper(GT_ADCX);
+     second->ChangeOper(GT_ADOX);
++    // Operand roles changed: the old contained/optional operand can now be
++    // the destructive destination. Recompute containment before allocation.
++    for (GenTree* add : {first, second})
++    {
++        for (GenTree* operand : add->Operands())
++        {
++            operand->ClearContained();
++            operand->ClearRegOptional();
++        }
++        ContainCheckBinary(add->AsOp());
++    }
+     for (GenTree* adc : adcs)
+     {
+         LIR::Use use;
+@@ -15105,11 +16027,61 @@ bool Lowering::LowerFullAdders()
+                     continue;
+                 }
+                 LIR::Use use;
+-                if (!BlockRange().TryGetUse(output, &use) || !use.User()->OperIs(GT_STORE_LCL_VAR) ||
+-                    use.User()->AsLclVar()->GetLclNum() != local)
++                if (!BlockRange().TryGetUse(output, &use) || !use.User()->OperIs(GT_STORE_LCL_VAR))
++                {
++                    continue;
++                }
++                unsigned outputLocal = use.User()->AsLclVar()->GetLclNum();
++                LclVarDsc* outputDsc = m_compiler->lvaGetDesc(outputLocal);
++                if (!outputDsc->lvTracked || outputDsc->IsAddressExposed() || outputDsc->lvIsParam)
+                 {
+                     continue;
+                 }
++                if (outputLocal != local)
++                {
++                    // A promoted input can be redefined through its parent.
++                    // The seed proof below deliberately handles scalar locals only.
++                    if (dsc->lvIsStructField)
++                    {
++                        continue;
++                    }
++                    // Copy propagation can give the first carry a different local
++                    // from subsequent full-adder outputs. Accept this seed only
++                    // when every definition of its input is independently a bit.
++                    bool seeded = false;
++                    bool bitInput = true;
++                    for (BasicBlock* definitionBlock : m_compiler->Blocks())
++                    {
++                        for (GenTree* definition : LIR::AsRange(definitionBlock))
++                        {
++                            if (!definition->OperIsLocal() || definition->AsLclVarCommon()->GetLclNum() != local ||
++                                definition->OperIs(GT_LCL_VAR))
++                            {
++                                continue;
++                            }
++                            if (!definition->OperIs(GT_STORE_LCL_VAR))
++                            {
++                                bitInput = false;
++                                continue;
++                            }
++                            GenTree* bit = definition->gtGetOp1();
++                            if (bit->OperIs(GT_CAST) && !bit->gtOverflow() && bit->TypeIs(TYP_LONG) &&
++                                bit->gtGetOp1()->TypeIs(TYP_INT))
++                            {
++                                bit = bit->gtGetOp1();
++                            }
++                            bool isBit = bit->IsIntegralConst(0) || bit->IsIntegralConst(1) ||
++                                         bit->OperIs(GT_SETCC) || bit->OperIsCompare();
++                            seeded |= isBit;
++                            bitInput &= isBit;
++                        }
++                    }
++                    if (!seeded || !bitInput)
++                    {
++                        continue;
++                    }
++                }
++                local = outputLocal;
+                 if (adders.size() == 32)
+                 {
+                     return false;
+@@ -15191,6 +16163,7 @@ bool Lowering::LowerFullAdders()
+                     if (definition.carryLocal == adder.carryLocal && definition.output == value)
+                     {
+                         fullAdder = true;
++                        initialized |= definition.input->AsLclVar()->GetLclNum() != adder.carryLocal;
+                     }
+                 }
+                 if (!fullAdder)
+@@ -15311,6 +16284,66 @@ bool Lowering::LowerFullAdders()
      return changed;
  }
  
@@ -950,6 +1100,11 @@ index 5ce80283..771dc49d 100644
 +            return true;
 +        case GT_IND:
 +            return node->TypeIs(TYP_INT, TYP_LONG, TYP_BYREF) && ((node->gtFlags & GTF_IND_VOLATILE) == 0);
++        case GT_STOREIND:
++            // Plain integer stores preserve CF/OF. Exclude GC stores (write
++            // barriers), volatile accesses and an uncontained zero operand.
++            return node->TypeIs(TYP_INT, TYP_LONG) && ((node->gtFlags & GTF_IND_VOLATILE) == 0) &&
++                   (!node->AsStoreInd()->Data()->IsIntegralConst(0) || node->AsStoreInd()->Data()->isContained());
 +        case GT_CNS_INT:
 +            return node->TypeIs(TYP_INT, TYP_LONG) && !node->IsIntegralConst(0);
 +        case GT_CAST:
@@ -965,7 +1120,7 @@ index 5ce80283..771dc49d 100644
  //------------------------------------------------------------------------
  // LowerCarryChains: Fold final-limb consumers, then remove single-use carry
  // materialization and restoration between arithmetic stages in one block.
-@@ -15350,10 +16263,7 @@ void Lowering::LowerCarryChains()
+@@ -15350,10 +16383,7 @@ void Lowering::LowerCarryChains()
              // Folding the final limb can insert its operand reads between a
              // stage's restore and arithmetic. These register copies do not
              // change the restored flags.
@@ -977,7 +1132,7 @@ index 5ce80283..771dc49d 100644
              {
                  restore = restore->gtPrev;
                  restoreBudget--;
-@@ -15430,9 +16340,7 @@ void Lowering::LowerCarryChains()
+@@ -15430,23 +16460,44 @@ void Lowering::LowerCarryChains()
                  continue;
              }
  
@@ -987,19 +1142,54 @@ index 5ce80283..771dc49d 100644
 +            // Only nodes whose code cannot write flags may cross the flags edge; see IsCarryFlagsCrossing.
              GenTree* crossing = producer->gtNext;
              unsigned scan     = 64;
-             for (; crossing != nullptr && crossing != restore && scan != 0; crossing = crossing->gtNext, scan--)
-@@ -15441,9 +16349,7 @@ void Lowering::LowerCarryChains()
-                 {
-                     continue;
-                 }
+-            for (; crossing != nullptr && crossing != restore && scan != 0; crossing = crossing->gtNext, scan--)
++            for (; crossing != nullptr && crossing != restore && scan != 0; scan--)
+             {
+-                if (crossing == cc || crossing == cast || crossing == constant)
+-                {
+-                    continue;
+-                }
 -                if (crossing->gtSetFlags() || crossing->OperConsumesFlags() ||
 -                    !(crossing->OperIs(GT_IL_OFFSET) || (crossing->OperIs(GT_LCL_VAR, GT_STORE_LCL_VAR) &&
 -                                                         crossing->TypeIs(TYP_INT, TYP_LONG, TYP_BYREF))))
-+                if (!IsCarryFlagsCrossing(crossing))
++                GenTree* next = crossing->gtNext;
++                if (crossing != cc && crossing != cast && crossing != constant && !IsCarryFlagsCrossing(crossing))
                  {
-                     break;
+-                    break;
++                    // Masked correction operands clobber CF if left between limbs.
++                    // Hoist only a closed invariant mask tree before the producer;
++                    // SideEffectSet checks definitions, memory and exception order.
++                    GenTree* hoistBefore = producer;
++                    unsigned rootBudget = 64;
++                    while (hoistBefore->OperConsumesFlags() && rootBudget != 0)
++                    {
++                        GenTree* previous = hoistBefore->gtPrev;
++                        for (; previous != nullptr && rootBudget != 0 && IsCarryFlagsCrossing(previous);
++                             previous = previous->gtPrev, rootBudget--)
++                        {
++                        }
++                        if (previous == nullptr || !previous->gtSetFlags())
++                        {
++                            break;
++                        }
++                        hoistBefore = previous;
++                        rootBudget--;
++                    }
++                    GenTree* moveStart = nullptr;
++                    if (!crossing->OperIs(GT_AND, GT_OR, GT_XOR) || crossing->gtSetFlags() ||
++                        hoistBefore->OperConsumesFlags() || rootBudget == 0 ||
++                        !IsCarryOperandAvailable(crossing, hoistBefore, &moveStart) || moveStart == nullptr)
++                    {
++                        break;
++                    }
++                    LIR::Range moved = BlockRange().Remove(moveStart, crossing);
++                    BlockRange().InsertBefore(hoistBefore, std::move(moved));
                  }
-@@ -15455,10 +16361,26 @@ void Lowering::LowerCarryChains()
++                crossing = next;
+             }
+             if (crossing != restore)
+             {
+@@ -15455,10 +16506,26 @@ void Lowering::LowerCarryChains()
  
              // The definition may be removed only if this is its sole read up
              // to the next definition, and it cannot escape through a live-out.
@@ -1030,7 +1220,7 @@ index 5ce80283..771dc49d 100644
                  if (use->OperIsLocal() && use->AsLclVarCommon()->GetLclNum() == local)
                  {
                      if (use->OperIs(GT_STORE_LCL_VAR))
-@@ -15471,7 +16393,7 @@ void Lowering::LowerCarryChains()
+@@ -15471,7 +16538,7 @@ void Lowering::LowerCarryChains()
                      }
                  }
              }
@@ -1039,8 +1229,112 @@ index 5ce80283..771dc49d 100644
              {
                  continue;
              }
+@@ -15856,9 +16923,11 @@ bool Lowering::IsCarryOperandAvailable(GenTree* operand, GenTree* producer, GenT
+         }
+     }
+ 
+-    if (operand->OperIs(GT_IND))
++    if (operand->OperIs(GT_IND) ||
++        (operand->OperIs(GT_AND, GT_OR, GT_XOR) && operand->TypeIs(TYP_INT, TYP_LONG) &&
++         !operand->gtSetFlags() && !operand->OperConsumesFlags()))
+     {
+-        // Move the load together with its address calculation. A closed range
++        // Move a load or pure mask expression together with its address calculation. A closed range
+         // ensures that no intermediate value has a use left behind. Check all
+         // crossed nodes for aliasing, exception ordering, and local definitions.
+         bool               isClosed;
+@@ -16081,11 +17150,54 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+         }
+ #endif
+         GenTree* operands[] = {(combine || negate) ? other->gtGetOp1() : other, combine ? other->gtGetOp2() : nullptr};
+-        GenTree* moveStart[2] = {};
+-        if (!IsCarryOperandAvailable(operands[0], producer, &moveStart[0]) ||
+-            (combine && !IsCarryOperandAvailable(operands[1], producer, &moveStart[1])))
++        // Moving flag-writing operand expressions immediately before ADC/SBB
++        // would destroy its incoming carry. Hoist before the chain's root.
++        GenTree* availableAt = producer;
++        unsigned rootBudget = 64;
++        while (availableAt->OperConsumesFlags() && rootBudget != 0)
+         {
+-            continue;
++            GenTree* previous = availableAt->gtPrev;
++            for (; previous != nullptr && rootBudget != 0 && IsCarryFlagsCrossing(previous);
++                 previous = previous->gtPrev, rootBudget--)
++            {
++            }
++            if (previous == nullptr || !previous->gtSetFlags())
++            {
++                break;
++            }
++            availableAt = previous;
++            rootBudget--;
++        }
++        GenTree* moveStart[2] = {};
++        bool keepPosition = false;
++        if (availableAt->OperConsumesFlags() || rootBudget == 0 ||
++            !IsCarryOperandAvailable(operands[0], availableAt, &moveStart[0]) ||
++            (combine && !IsCarryOperandAvailable(operands[1], availableAt, &moveStart[1])))
++        {
++            // A preceding output store can alias a following input load. Keep
++            // the final ADC/SBB at its original position instead of moving the
++            // load across that store, provided every surviving node preserves
++            // flags. The nested ADD/SUB is removed when forming the full adder.
++            GenTree* crossing = producer->gtNext;
++            unsigned scan = 64;
++            for (; crossing != nullptr && crossing != add && scan != 0; crossing = crossing->gtNext, scan--)
++            {
++                if (crossing == carry || crossing == cast || crossing == store || crossing == value ||
++                    ((combine || negate) && crossing == other))
++                {
++                    continue;
++                }
++                if (!IsCarryFlagsCrossing(crossing))
++                {
++                    break;
++                }
++            }
++            if (crossing != add)
++            {
++                continue;
++            }
++            moveStart[0] = moveStart[1] = nullptr;
++            keepPosition = true;
+         }
+ 
+         // Inserting ADC/SBB changes flags. No later consumer may observe the
+@@ -16112,14 +17224,14 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+         if (!combine)
+         {
+             operands[1] = m_compiler->gtNewZeroConNode(add->TypeGet());
+-            BlockRange().InsertBefore(producer, operands[1]);
++            BlockRange().InsertBefore(availableAt, operands[1]);
+         }
+         for (unsigned i = 0; i < 2; i++)
+         {
+             if (moveStart[i] != nullptr)
+             {
+                 LIR::Range range = BlockRange().Remove(moveStart[i], operands[i]);
+-                BlockRange().InsertBefore(producer, std::move(range));
++                BlockRange().InsertBefore(availableAt, std::move(range));
+             }
+             operands[i]->ClearContained();
+             operands[i]->ClearRegOptional();
+@@ -16138,8 +17250,11 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+         add->ChangeOper(add->OperIs(GT_SUB) ? GT_SUB_BORROW : (borrow ? GT_ADD_BORROW : GT_ADD_CARRY));
+         add->gtOp1 = operands[0];
+         add->gtOp2 = operands[1];
+-        BlockRange().Remove(add);
+-        BlockRange().InsertAfter(producer, add);
++        if (!keepPosition)
++        {
++            BlockRange().Remove(add);
++            BlockRange().InsertAfter(producer, add);
++        }
+         BlockRange().Remove(carry);
+         if (cast != nullptr)
+         {
 diff --git a/src/coreclr/jit/lower.h b/src/coreclr/jit/lower.h
-index 2522ef0c..d78c3058 100644
+index 2522ef0c..42dc3127 100644
 --- a/src/coreclr/jit/lower.h
 +++ b/src/coreclr/jit/lower.h
 @@ -182,6 +182,9 @@ private:
@@ -1061,14 +1355,35 @@ index 2522ef0c..d78c3058 100644
  #endif
      GenTree* LowerJTrue(GenTreeOp* jtrue);
  #ifdef TARGET_RISCV64
-@@ -696,6 +700,7 @@ private:
+@@ -695,7 +699,8 @@ private:
+     bool        m_hasAddCarry          = false;
      BasicBlock* m_lastSubtractionBlock = nullptr;
      unsigned    m_carryLocalScanBudget = 65536; // Node/block budget for current-IR dead-on-exit proofs.
-     unsigned    m_carryUseScanBudget   = 4096;  // Extra node visits beyond the bounded local carry-use scans.
+-    unsigned    m_carryUseScanBudget   = 4096;  // Extra node visits beyond the bounded local carry-use scans.
++    unsigned    m_carryUseScanBudget   = 16384;  // Extra node visits beyond the bounded local carry-use scans.
 +    unsigned    m_maskSelectScanBudget = 65536; // Node visits for the block rescans of LowerMaskSelects.
  #endif
  
  #ifdef FEATURE_FIXED_OUT_ARGS
+diff --git a/src/coreclr/jit/lsraxarch.cpp b/src/coreclr/jit/lsraxarch.cpp
+index f50b30f9..4cd427cd 100644
+--- a/src/coreclr/jit/lsraxarch.cpp
++++ b/src/coreclr/jit/lsraxarch.cpp
+@@ -2463,8 +2463,12 @@ int LinearScan::BuildHWIntrinsic(GenTreeHWIntrinsic* intrinsicTree, int* pDstCou
+                     srcCount = BuildOperandUses(op1, SRBM_EDX);
+                     srcCount += BuildOperandUses(op2, ForceLowGprForApxIfNeeded(op2, availableIntRegs & ~SRBM_EDX,
+                                                                                 canHWIntrinsicUseApxRegs));
+-                    BuildDef(intrinsicTree, apxAwareRegCandidates, 0);
+-                    BuildDef(intrinsicTree, apxAwareRegCandidates, 1);
++                    // Keep the row multiplier in RDX across consecutive MULX
++                    // operations instead of overwriting it with each low half.
++                    SingleTypeRegSet rowDefs = ForceLowGprForApxIfNeeded(op1, availableIntRegs & ~SRBM_EDX,
++                                                                       canHWIntrinsicUseApxRegs);
++                    BuildDef(intrinsicTree, rowDefs, 0);
++                    BuildDef(intrinsicTree, rowDefs, 1);
+                     buildUses = false;
+                     break;
+                 }
 diff --git a/src/tests/JIT/opt/Add/MaskSelect.cs b/src/tests/JIT/opt/Add/MaskSelect.cs
 new file mode 100644
 index 00000000..49651e64
@@ -1425,6 +1740,241 @@ index 00000000..5179eda9
 +  </PropertyGroup>
 +  <ItemGroup>
 +    <Compile Include="MontgomeryRows.cs" />
++    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
++    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
++  </ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/SeededMaskedCarry.cs b/src/tests/JIT/opt/Add/SeededMaskedCarry.cs
+new file mode 100644
+index 00000000..d5cfeda5
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/SeededMaskedCarry.cs
+@@ -0,0 +1,211 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using System.Runtime.InteropServices;
++using Xunit;
++
++public class SeededMaskedCarryTests
++{
++    private const ulong K0 = 0xb9feffffffffaaab;
++    private const ulong K1 = 0x1eabfffeb153ffff;
++    private const ulong K2 = 0x6730d2a0f6b0f624;
++    private static readonly BigInteger Limit = BigInteger.One << 192;
++    private static readonly BigInteger Constant = K0 + ((BigInteger)K1 << 64) + ((BigInteger)K2 << 128);
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Add(ulong a, ulong b, ref ulong carry)
++    {
++        ulong sum = a + b;
++        ulong bit = sum < a ? 1UL : 0UL;
++        ulong result = sum + carry;
++        carry = bit + (result < sum ? 1UL : 0UL);
++        return result;
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Sub(ulong a, ulong b, ref ulong borrow)
++    {
++        ulong difference = a - b;
++        ulong bit = difference > a ? 1UL : 0UL;
++        ulong result = difference - borrow;
++        borrow = bit + (result > difference ? 1UL : 0UL);
++        return result;
++    }
++
++    // Copy propagation gives the first carry a different local. The masks
++    // between successive limbs must move before, never across, their inputs.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static BigInteger Masked(ulong a, ulong b, ulong c, ulong mask, bool subtract)
++    {
++        ulong carry = 0;
++        ulong x, y, z;
++        if (subtract)
++        {
++            x = Sub(a, K0 & mask, ref carry);
++            y = Sub(b, K1 & mask, ref carry);
++            z = Sub(c, K2 & mask, ref carry);
++        }
++        else
++        {
++            x = Add(a, K0 & mask, ref carry);
++            y = Add(b, K1 & mask, ref carry);
++            z = Add(c, K2 & mask, ref carry);
++        }
++        return x + ((BigInteger)y << 64) + ((BigInteger)z << 128);
++    }
++
++    // The incoming word is deliberately not a bit. Do not fold its full adder.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong NonBit(ulong a, ulong b, ulong input, out ulong carry)
++    {
++        carry = input;
++        return Add(a, b, ref carry);
++    }
++
++    // A mask depends on the previous result; it cannot move ahead of that
++    // definition even if doing so would remove a SETCC/restore pair.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static BigInteger Dependent(ulong a, ulong b, ulong c, ulong mask)
++    {
++        ulong carry = 0;
++        ulong x = Add(a, K0 & mask, ref carry);
++        mask ^= x;
++        ulong y = Add(b, K1 & mask, ref carry);
++        ulong z = Add(c, K2 & mask, ref carry);
++        return x + ((BigInteger)y << 64) + ((BigInteger)z << 128);
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong MulAdd(ulong row, ulong limb, ulong addend, ulong carry, out ulong low)
++    {
++        ulong high = Math.BigMul(row, limb, out low);
++        low += addend;
++        high += low < addend ? 1UL : 0UL;
++        low += carry;
++        high += low < carry ? 1UL : 0UL;
++        return high;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static void ConstantRow(ulong row, ulong a, ulong b, ulong c, out ulong x, out ulong y, out ulong z, out ulong high)
++    {
++        ulong carry = MulAdd(row, K0, a, 0, out x);
++        carry = MulAdd(row, K1, b, carry, out y);
++        high = MulAdd(row, K2, c, carry, out z);
++    }
++
++    // Output stores can alias subsequent input loads. Carry forwarding must
++    // preserve their order and handle the last limb without hoisting a load.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static void StoreAlias(ulong[] words, int offset)
++    {
++        ulong carry = 0;
++        ref ulong first = ref words[0];
++        Unsafe.Add(ref first, offset) = Add(first, K0, ref carry);
++        Unsafe.Add(ref first, offset + 1) = Add(Unsafe.Add(ref first, 1), K1, ref carry);
++        Unsafe.Add(ref first, offset + 2) = Add(Unsafe.Add(ref first, 2), K2, ref carry);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong MultiplyLoop(Span<ulong> destination, ReadOnlySpan<ulong> source, ulong row)
++    {
++        ref ulong dst = ref MemoryMarshal.GetReference(destination);
++        ref ulong src = ref MemoryMarshal.GetReference(source);
++        ulong carry = 0;
++        for (int i = 0; i < source.Length; i++)
++        {
++            carry = MulAdd(row, Unsafe.Add(ref src, i), Unsafe.Add(ref dst, i), carry, out Unsafe.Add(ref dst, i));
++        }
++        return carry;
++    }
++
++    [Fact]
++    public static int TestMultiplyLoop()
++    {
++        Random random = new Random(134039);
++        byte[] bytes = new byte[8];
++        for (int trial = 0; trial < 500; trial++)
++        {
++            int count = trial % 17;
++            ulong[] destination = new ulong[count];
++            ulong[] source = new ulong[count];
++            BigInteger a = 0, b = 0;
++            for (int i = count - 1; i >= 0; i--)
++            {
++                random.NextBytes(bytes); destination[i] = BitConverter.ToUInt64(bytes, 0);
++                random.NextBytes(bytes); source[i] = BitConverter.ToUInt64(bytes, 0);
++                a = (a << 64) + destination[i];
++                b = (b << 64) + source[i];
++            }
++            random.NextBytes(bytes); ulong row = BitConverter.ToUInt64(bytes, 0);
++            BigInteger expected = a + b * row;
++            ulong carry = MultiplyLoop(destination, source, row);
++            BigInteger actual = carry;
++            for (int i = count - 1; i >= 0; i--) actual = (actual << 64) + destination[i];
++            if (actual != expected) return 6;
++        }
++        return 100;
++    }
++
++    [Fact]
++    public static int TestEntryPoint()
++    {
++        Random random = new Random(2537);
++        ulong[] edges = {0, 1, ulong.MaxValue, ulong.MaxValue - 1, K0, K1, K2};
++        byte[] bytes = new byte[8];
++        for (int i = 0; i < 10000; i++)
++        {
++            random.NextBytes(bytes); ulong a = i < edges.Length ? edges[i] : BitConverter.ToUInt64(bytes, 0);
++            random.NextBytes(bytes); ulong b = BitConverter.ToUInt64(bytes, 0);
++            random.NextBytes(bytes); ulong c = BitConverter.ToUInt64(bytes, 0);
++            ulong mask = (i & 1) == 0 ? 0 : ulong.MaxValue;
++            BigInteger value = a + ((BigInteger)b << 64) + ((BigInteger)c << 128);
++            foreach (bool subtract in new[] {false, true})
++            {
++                BigInteger expected = (value + (subtract ? -1 : 1) * (mask == 0 ? 0 : Constant)) % Limit;
++                if (expected.Sign < 0) expected += Limit;
++                BigInteger actual = Masked(a, b, c, mask, subtract);
++                if (actual != expected)
++                {
++                    Console.WriteLine($"i={i} subtract={subtract} a={a:x16} b={b:x16} c={c:x16} mask={mask:x16} actual={actual:x} expected={expected:x}");
++                    return 1;
++                }
++            }
++            ConstantRow(a, a, b, c, out ulong rx, out ulong ry, out ulong rz, out ulong rh);
++            BigInteger rowExpected = value + (BigInteger)a * Constant;
++            BigInteger rowActual = rx + ((BigInteger)ry << 64) + ((BigInteger)rz << 128) + ((BigInteger)rh << 192);
++            if (rowActual != rowExpected) return 4;
++            foreach (int offset in new[] {0, 1})
++            {
++                ulong[] words = {a, b, c, 0};
++                ulong[] expectedWords = {a, b, c, 0};
++                ulong referenceCarry = 0;
++                ulong[] constants = {K0, K1, K2};
++                for (int lane = 0; lane < 3; lane++)
++                {
++                    BigInteger total = (BigInteger)expectedWords[lane] + constants[lane] + referenceCarry;
++                    expectedWords[offset + lane] = (ulong)(total & ulong.MaxValue);
++                    referenceCarry = (ulong)(total >> 64);
++                }
++                StoreAlias(words, offset);
++                for (int lane = 0; lane < 4; lane++) if (words[lane] != expectedWords[lane]) return 5;
++            }
++            ulong input = i % 3 == 0 ? ulong.MaxValue : (ulong)i;
++            ulong sum = a + b;
++            ulong r = sum + input;
++            ulong expectedCarry = (sum < a ? 1UL : 0UL) + (r < sum ? 1UL : 0UL);
++            if (NonBit(a, b, input, out ulong carry) != r || carry != expectedCarry) return 2;
++            BigInteger first = (BigInteger)a + (K0 & mask);
++            ulong x = (ulong)(first & ulong.MaxValue);
++            mask ^= x;
++            BigInteger second = (BigInteger)b + (K1 & mask) + (first >> 64);
++            BigInteger third = (BigInteger)c + (K2 & mask) + (second >> 64);
++            BigInteger expectedDependent = x + ((second & ulong.MaxValue) << 64) + ((third & ulong.MaxValue) << 128);
++            if (Dependent(a, b, c, (i & 1) == 0 ? 0 : ulong.MaxValue) != expectedDependent) return 3;
++        }
++        return 100;
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/SeededMaskedCarry.csproj b/src/tests/JIT/opt/Add/SeededMaskedCarry.csproj
+new file mode 100644
+index 00000000..53464bfe
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/SeededMaskedCarry.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="SeededMaskedCarry.cs" />
 +    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
 +    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
 +  </ItemGroup>

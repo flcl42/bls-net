@@ -47,7 +47,11 @@ Fp2, Fp6 and Fp12 inversion reduce through tower norms to base-field inversion. 
 
 `FpWide` is a signed 768-bit value with twelve 64-bit limbs. `Fp.MultiplyWide` produces a raw product; `AddWide` and `SubtractWide` combine raw values. These intermediates are internal arithmetic values, not canonical Fp residues.
 
+The net11.0 raw multiplier expands all six rows. Its reducers first reduce the low 384 bits, then add the signed high 384 bits: the cancellation multiplier depends only on the low half, so this is the same Montgomery quotient without a carry bit passing between rows. The net10.0 build retains the compact row loops because its stock JIT spills the expanded formula.
+
 Let R = 2^384. `ReduceWide` requires |value| < 3pR. Its Montgomery quotient lies in (-3p, 4p); it adds 4p when negative, then reduces by 2p and p. `ReduceWideSmall` requires |value| < pR. Its quotient lies in (-p, 2p), so one sign correction and final reduction suffice. Both return canonical Montgomery values.
+
+`ReduceWidePositive` requires 0 ≤ value < pR and omits the sign correction in the net11.0 build. Fp2 multiplication uses three raw products and two reductions there: the real component has magnitude below p², and the imaginary component is in [0, 2p²), so the small signed and positive reducers apply respectively. Its unreduced input sums are below 2p. The three distinct product buffers are combined in place before either output coordinate is written, preserving public Fp2 input/output aliases. The net10.0 build retains three CIOS multiplications. Fp2 square retains two CIOS multiplications; expanded square variants did not improve the measured paths.
 
 `WideTower.Multiply2` forms unreduced Fp2 products. For canonical inputs, the real component has magnitude below p² and the imaginary component lies in [0, 2p²). `Add2`, `Subtract2` and `NonResidue2` combine them. `Multiply6`, `MultiplyBy0Y06` and `MultiplyByXY06` produce wide Fp6 results; `Reduce6` or `Reduce6Small` finishes them.
 
@@ -59,7 +63,7 @@ Small single-field entry points, including `Fp.Multiply`, remain inlineable for 
 
 `CurveField<T>` isolates field operations used by generic point kernels with `NoInlining | AggressiveOptimization` wrappers. Fp2 arithmetic already has isolated entry points. Larger arithmetic formulas use `Fp.MultiplyComposite` to keep the Fp kernel compact. `FpCurveRoots` applies this pattern to the fixed square-root chain. Small coordinate moves and scalar logic can remain inline. Calling policies must be measured on each target runtime; forcing the public multiply to be non-inlined did not improve both stock and patched runtimes.
 
-The Fp row loop processes two rows per iteration. A fully unrolled six-limb loop exceeds the experimental JIT's 2,048-node full-adder budget. The loop trades back-edge register moves for a method small enough to preserve carry chains. [Performance](performance.md#kernel-and-jit-details) describes the carry idioms and runtime patch.
+The Fp Montgomery row loop processes two rows per iteration. Three-row and fully expanded Montgomery variants increased spills and were discarded. The experimental JIT's full-adder analysis still has a 2,048-node budget; large inline kernels also need independent benchmark methods to avoid spending that budget on unrelated switch cases. Raw multiplication benefits from full expansion behind a compact call. [Performance](performance.md#kernel-and-jit-details) describes the carry idioms and runtime patch, and the [field-kernel report](field-kernel-report.md) records the follow-up experiments.
 
 ## Curve coordinates and subgroup checks
 

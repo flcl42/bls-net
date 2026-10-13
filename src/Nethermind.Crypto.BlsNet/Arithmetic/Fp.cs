@@ -174,8 +174,8 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
     public static void Add(out Fp result, in Fp left, in Fp right)
     {
         // p < 2^381, so left + right < 2^382 never carries out of the top limb.
-        ulong r0 = left._l0 + right._l0;
-        ulong carry = r0 < left._l0 ? 1UL : 0UL;
+        ulong carry = 0;
+        ulong r0 = AddCarry(left._l0, right._l0, ref carry);
         ulong r1 = AddCarry(left._l1, right._l1, ref carry);
         ulong r2 = AddCarry(left._l2, right._l2, ref carry);
         ulong r3 = AddCarry(left._l3, right._l3, ref carry);
@@ -188,8 +188,8 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Subtract(out Fp result, in Fp left, in Fp right)
     {
-        ulong r0 = left._l0 - right._l0;
-        ulong borrow = r0 > left._l0 ? 1UL : 0UL;
+        ulong borrow = 0;
+        ulong r0 = SubBorrow(left._l0, right._l0, ref borrow);
         ulong r1 = SubBorrow(left._l1, right._l1, ref borrow);
         ulong r2 = SubBorrow(left._l2, right._l2, ref borrow);
         ulong r3 = SubBorrow(left._l3, right._l3, ref borrow);
@@ -204,7 +204,9 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
         ulong s4 = AddCarry(r4, M4, ref carry);
         ulong s5 = AddCarry(r5, M5, ref carry);
 
-        ulong mask = ChoiceToMask(borrow);
+        // r is in (-p,p). Adding p carries out exactly when r is
+        // negative; select from these flags instead of retaining the borrow.
+        ulong mask = ChoiceToMask(carry);
         result = new Fp(
             Select(s0, r0, mask),
             Select(s1, r1, mask),
@@ -332,14 +334,22 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
         ulong r3 = SubBorrow(a._l3, sum._l3, ref borrow);
         ulong r4 = SubBorrow(a._l4, sum._l4, ref borrow);
         ulong r5 = SubBorrow(a._l5, sum._l5, ref borrow);
-        ulong mask = ChoiceToMask(borrow);
-        ulong carry = 0;
-        r0 = AddCarry(r0, 0x73fdffffffff5556UL & mask, ref carry);
-        r1 = AddCarry(r1, 0x3d57fffd62a7ffffUL & mask, ref carry);
-        r2 = AddCarry(r2, 0xce61a541ed61ec48UL & mask, ref carry);
-        r3 = AddCarry(r3, 0xc8ee9709e70a257eUL & mask, ref carry);
-        r4 = AddCarry(r4, 0x96374f6c869759aeUL & mask, ref carry);
-        r5 = AddCarry(r5, 0x340223d472ffcd34UL & mask, ref carry);
+        // For r in (-2p,p), r + 2p carries out exactly when r is negative.
+        // Select with this chain's flags rather than materializing the borrow.
+        ulong s0 = r0 + 0x73fdffffffff5556UL;
+        ulong carry = s0 < r0 ? 1UL : 0UL;
+        ulong s1 = AddCarry(r1, 0x3d57fffd62a7ffffUL, ref carry);
+        ulong s2 = AddCarry(r2, 0xce61a541ed61ec48UL, ref carry);
+        ulong s3 = AddCarry(r3, 0xc8ee9709e70a257eUL, ref carry);
+        ulong s4 = AddCarry(r4, 0x96374f6c869759aeUL, ref carry);
+        ulong s5 = AddCarry(r5, 0x340223d472ffcd34UL, ref carry);
+        ulong mask = ChoiceToMask(carry);
+        r0 = Select(s0, r0, mask);
+        r1 = Select(s1, r1, mask);
+        r2 = Select(s2, r2, mask);
+        r3 = Select(s3, r3, mask);
+        r4 = Select(s4, r4, mask);
+        r5 = Select(s5, r5, mask);
         Reduce(out result, r0, r1, r2, r3, r4, r5);
     }
 

@@ -23,6 +23,8 @@ internal static unsafe partial class Program
         NativeAvailable = NativeBlstLoader.TryLoad(out nint handle);
         if (NativeAvailable) NativeLibrary.SetDllImportResolver(Assembly.GetExecutingAssembly(), (name, _, _) => name == "blst" ? handle : 0);
         Console.WriteLine(RuntimeInformation.FrameworkDescription);
+        if (args.Contains("--kernel-timing")) { KernelTimings(); return; }
+        if (args.Contains("--kernel-tests")) { KernelTests(); Console.WriteLine($"Passed {_checks:N0} kernel checks."); return; }
         if (args.Contains("--timing") || args.Contains("--perf")) { Timings(args.Contains("--perf")); return; }
         Check(sizeof(Fp6) == 288 && sizeof(Fp12) == 576, "layout");
         KernelTests();

@@ -92,6 +92,8 @@ public struct Fp2 : IEquatable<Fp2>, IField<Fp2>
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Multiply(out Fp2 result, in Fp2 left, in Fp2 right)
     {
+#if NET10_0
+        // The stock .NET 10 JIT spills the wide formula; keep its compact CIOS calls.
         Fp.MultiplyComposite(out Fp t0, left.C0, right.C0);
         Fp.MultiplyComposite(out Fp t1, left.C1, right.C1);
         Fp.AddUnreduced(out Fp sa, left.C0, left.C1);
@@ -99,6 +101,19 @@ public struct Fp2 : IEquatable<Fp2>, IField<Fp2>
         Fp.MultiplyComposite(out Fp t2, sa, sb);
         Fp.SubtractComposite(out result.C0, t0, t1);
         Fp.SubtractSumComposite(out result.C1, t2, t0, t1);
+#else
+        // Each raw product is below 4p^2. The final real and imaginary
+        // components have magnitude below p^2 and 2p^2, respectively, so
+        // |real| < pR and 0 <= imaginary < pR; use signed and positive reducers.
+        Fp.AddUnreduced(out Fp sa, left.C0, left.C1);
+        Fp.AddUnreduced(out Fp sb, right.C0, right.C1);
+        Fp.MultiplyWide(out FpWide t0, left.C0, right.C0);
+        Fp.MultiplyWide(out FpWide t1, left.C1, right.C1);
+        Fp.MultiplyWide(out FpWide t2, sa, sb);
+        Fp.SubtractWideProducts(ref t0, t1, ref t2);
+        Fp.ReduceWideSmall(out result.C0, t0);
+        Fp.ReduceWidePositive(out result.C1, t2);
+#endif
     }
 
     /// <summary>(a0 + a1 u)^2 = (a0 + a1)(a0 - a1) + 2 a0 a1 u.</summary>

@@ -41,6 +41,7 @@ public readonly partial struct Fp
         ulong t3 = 0;
         ulong t4 = 0;
         ulong t5 = 0;
+#if NET10_0
         for (int i = 0; i < 6; i++)
         {
             ulong row = Unsafe.Add(ref br, i);
@@ -53,6 +54,62 @@ public readonly partial struct Fp
             Unsafe.Add(ref rr, i) = low;
             t5 = carry;
         }
+#else
+        ulong row = Unsafe.Add(ref br, 0);
+        ulong carry = MulAdd(row, a0, t0, 0, out ulong low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 0) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 1);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 1) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 2);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 2) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 3);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 3) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 4);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 4) = low;
+        t5 = carry;
+        row = Unsafe.Add(ref br, 5);
+        carry = MulAdd(row, a0, t0, 0, out low);
+        carry = MulAdd(row, a1, t1, carry, out t0);
+        carry = MulAdd(row, a2, t2, carry, out t1);
+        carry = MulAdd(row, a3, t3, carry, out t2);
+        carry = MulAdd(row, a4, t4, carry, out t3);
+        carry = MulAdd(row, a5, t5, carry, out t4);
+        Unsafe.Add(ref rr, 5) = low;
+        t5 = carry;
+#endif
         r.L6 = t0;
         r.L7 = t1;
         r.L8 = t2;
@@ -62,10 +119,44 @@ public readonly partial struct Fp
         result = r;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ReduceWideCore(out Fp result, in FpWide value)
+    {
+        ulong t0 = value.L0;
+        ulong t1 = value.L1;
+        ulong t2 = value.L2;
+        ulong t3 = value.L3;
+        ulong t4 = value.L4;
+        ulong t5 = value.L5;
+        for (int i = 0; i < 6; i++)
+        {
+            ulong q = t0 * N0;
+            ulong carry = MulAdd(q, M0, t0, 0, out _);
+            carry = MulAdd(q, M1, t1, carry, out t0);
+            carry = MulAdd(q, M2, t2, carry, out t1);
+            carry = MulAdd(q, M3, t3, carry, out t2);
+            carry = MulAdd(q, M4, t4, carry, out t3);
+            carry = MulAdd(q, M5, t5, carry, out t4);
+            t5 = carry;
+        }
+        // REDC(value) = REDC(low 384 bits) + signed high 384 bits.
+        // Defer the high half until all six rows are finished: there is no
+        // loop-carried carry bit to materialize at each row boundary.
+        ulong h0 = t0 + value.L6;
+        ulong addCarry = h0 < t0 ? 1UL : 0UL;
+        ulong h1 = AddCarry(t1, value.L7, ref addCarry);
+        ulong h2 = AddCarry(t2, value.L8, ref addCarry);
+        ulong h3 = AddCarry(t3, value.L9, ref addCarry);
+        ulong h4 = AddCarry(t4, value.L10, ref addCarry);
+        ulong h5 = AddCarry(t5, value.L11, ref addCarry);
+        result = new Fp(h0, h1, h2, h3, h4, h5);
+    }
+
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     internal static void ReduceWide(out Fp result, in FpWide value)
     {
+#if NET10_0
         ref ulong high = ref Unsafe.AsRef(in value.L6);
         ulong t0 = value.L0;
         ulong t1 = value.L1;
@@ -85,6 +176,11 @@ public readonly partial struct Fp
             carry = MulAdd(q, M5, t5, carry, out t4);
             t5 = AddCarry(Unsafe.Add(ref high, i), carry, ref topCarry);
         }
+#else
+        ReduceWideCore(out Fp quotient, value);
+        ulong t0 = quotient._l0, t1 = quotient._l1, t2 = quotient._l2;
+        ulong t3 = quotient._l3, t4 = quotient._l4, t5 = quotient._l5;
+#endif
         // |value|<3pR yields a quotient in (-3p,4p). Since 4p<2^383,
         // its sign bit suffices. Add 4p if negative, then reduce by 2p and p.
         ulong mask = 0 - (t5 >> 63);
@@ -116,6 +212,7 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     internal static void ReduceWideSmall(out Fp result, in FpWide value)
     {
+#if NET10_0
         ref ulong high = ref Unsafe.AsRef(in value.L6);
         ulong t0 = value.L0;
         ulong t1 = value.L1;
@@ -135,6 +232,11 @@ public readonly partial struct Fp
             carry = MulAdd(q, M5, t5, carry, out t4);
             t5 = AddCarry(Unsafe.Add(ref high, i), carry, ref topCarry);
         }
+#else
+        ReduceWideCore(out Fp quotient, value);
+        ulong t0 = quotient._l0, t1 = quotient._l1, t2 = quotient._l2;
+        ulong t3 = quotient._l3, t4 = quotient._l4, t5 = quotient._l5;
+#endif
         // |value|<pR gives a quotient in (-p,2p); only one correction is needed.
         ulong mask = 0 - (t5 >> 63);
         ulong correctionCarry = 0;
@@ -146,6 +248,34 @@ public readonly partial struct Fp
         ulong h5 = AddCarry(t5, M5 & mask, ref correctionCarry);
         Reduce(out result, h0, h1, h2, h3, h4, h5);
     }
+
+    // Nonnegative values below pR need no signed correction. In particular,
+    // Fp2 imaginary products lie in [0, 2p^2) < pR.
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void ReduceWidePositive(out Fp result, in FpWide value)
+    {
+#if NET10_0
+        ReduceWideSmall(out result, value);
+#else
+        ReduceWideCore(out Fp quotient, value);
+        Reduce(out result, quotient._l0, quotient._l1, quotient._l2,
+            quotient._l3, quotient._l4, quotient._l5);
+#endif
+    }
+
+#if !NET10_0
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    // Transform three distinct product buffers into the real and imaginary
+    // Karatsuba components, keeping t1 intact. The ref buffers are modified in place.
+    internal static void SubtractWideProducts(ref FpWide t0, in FpWide t1, ref FpWide t2)
+    {
+        SubtractWideInline(out t2, t2, t0);
+        SubtractWideInline(out t2, t2, t1);
+        SubtractWideInline(out t0, t0, t1);
+    }
+#endif
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]

@@ -59,6 +59,8 @@ Build with `BlsNetSource` set to the library source directory if the linked proj
 
 ## Component measurements
 
+The [field-kernel follow-up report](field-kernel-report.md) records newer before/after kernel timings, complete disassembly counts and stress validation. It reduces patched Fp2 multiplication to three raw products and two Montgomery reductions, eliminates carry materialization in the captured field kernels, and preserves compact stock .NET 10 kernels through the target framework. The historical component tables below precede that follow-up. They do not measure the later tower/curve work in other checkouts.
+
 The following tables retain the latest implementation follow-up measurements. They use stock .NET 10.0.12, stock .NET 11 RC1 and the patched launcher identifying itself as .NET 12.0.0-dev. Each native column comes from the same runtime and loop shape as its managed counterpart. These are warmed best-of-round component timings, measured separately from the BenchmarkDotNet precompile means. Input construction, validation, conversion and harness costs differ, so the two sets should not be compared as identical operations. Shared-host contention limits small comparisons.
 
 ### Field operations
@@ -70,7 +72,7 @@ The following tables retain the latest implementation follow-up measurements. Th
 | Fp inverse | 1.936 µs | 1.362 µs | 1.772 µs | 1.401 µs | 1.359 µs | 1.404 µs |
 | Fp2 multiply | 191.63 ns | 64.47 ns | 189.87 ns | 63.67 ns | 78.78 ns | 64.02 ns |
 
-Binary-GCD inversion is about 27× faster than Fermat on .NET 10, 19× on .NET 11 and 16× on the patched runtime in these runs. The Fp square native reference is `blst_fp_mul(a, a)`, not a dedicated native squaring entry point.
+Binary-GCD inversion is about 27× faster than Fermat on .NET 10, 19× on .NET 11 and 16× on the patched runtime in these runs. The Fp square native reference in this historical table is `blst_fp_mul(a, a)`. The follow-up kernel runner uses the dedicated `blst_fp_sqr` entry point and also measures `blst_fp2_sqr`.
 
 ### Extension tower
 
