@@ -175,7 +175,9 @@ internal static class Msm<T> where T : unmanaged, IField<T>
                 Xyzz<T> acc = default, sum = default;
                 for (int k = bucketCount - 1; k >= 0; k--)
                 {
-                    Xyzz<T> p = counts[k] == 0 ? default : new Xyzz<T>
+                    // A nonempty bucket may reduce to affine infinity after
+                    // inverse points cancel. Preserve its zero projective scale.
+                    Xyzz<T> p = counts[k] == 0 || IsInfinity(a[starts[k]]) ? default : new Xyzz<T>
                     { X = a[starts[k]].X, Y = a[starts[k]].Y, ZZ = T.One, ZZZ = T.One };
                     Xyzz<T>.Add(out acc, acc, p); Xyzz<T>.Add(out sum, sum, acc);
                 }
