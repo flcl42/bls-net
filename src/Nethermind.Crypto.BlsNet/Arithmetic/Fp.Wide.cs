@@ -1,0 +1,226 @@
+using System.Runtime.CompilerServices;
+
+namespace Nethermind.Crypto.BlsNet.Arithmetic;
+
+// Signed 768-bit intermediates, least-significant limb first. The tower
+// formulas keep their magnitude below 22p^2 < 3p*2^384 < 2^767.
+internal struct FpWide
+{
+    internal ulong L0;
+    internal ulong L1;
+    internal ulong L2;
+    internal ulong L3;
+    internal ulong L4;
+    internal ulong L5;
+    internal ulong L6;
+    internal ulong L7;
+    internal ulong L8;
+    internal ulong L9;
+    internal ulong L10;
+    internal ulong L11;
+}
+
+public readonly partial struct Fp
+{
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void MultiplyWide(out FpWide result, in Fp a, in Fp b)
+    {
+        Unsafe.SkipInit(out FpWide r);
+        ref ulong br = ref Unsafe.As<Fp, ulong>(ref Unsafe.AsRef(in b));
+        ref ulong rr = ref r.L0;
+        ulong a0 = a._l0;
+        ulong a1 = a._l1;
+        ulong a2 = a._l2;
+        ulong a3 = a._l3;
+        ulong a4 = a._l4;
+        ulong a5 = a._l5;
+        ulong t0 = 0;
+        ulong t1 = 0;
+        ulong t2 = 0;
+        ulong t3 = 0;
+        ulong t4 = 0;
+        ulong t5 = 0;
+        for (int i = 0; i < 6; i++)
+        {
+            ulong row = Unsafe.Add(ref br, i);
+            ulong carry = MulAdd(row, a0, t0, 0, out ulong low);
+            carry = MulAdd(row, a1, t1, carry, out t0);
+            carry = MulAdd(row, a2, t2, carry, out t1);
+            carry = MulAdd(row, a3, t3, carry, out t2);
+            carry = MulAdd(row, a4, t4, carry, out t3);
+            carry = MulAdd(row, a5, t5, carry, out t4);
+            Unsafe.Add(ref rr, i) = low;
+            t5 = carry;
+        }
+        r.L6 = t0;
+        r.L7 = t1;
+        r.L8 = t2;
+        r.L9 = t3;
+        r.L10 = t4;
+        r.L11 = t5;
+        result = r;
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void ReduceWide(out Fp result, in FpWide value)
+    {
+        ref ulong high = ref Unsafe.AsRef(in value.L6);
+        ulong t0 = value.L0;
+        ulong t1 = value.L1;
+        ulong t2 = value.L2;
+        ulong t3 = value.L3;
+        ulong t4 = value.L4;
+        ulong t5 = value.L5;
+        ulong topCarry = 0;
+        for (int i = 0; i < 6; i++)
+        {
+            ulong q = t0 * N0;
+            ulong carry = MulAdd(q, M0, t0, 0, out _);
+            carry = MulAdd(q, M1, t1, carry, out t0);
+            carry = MulAdd(q, M2, t2, carry, out t1);
+            carry = MulAdd(q, M3, t3, carry, out t2);
+            carry = MulAdd(q, M4, t4, carry, out t3);
+            carry = MulAdd(q, M5, t5, carry, out t4);
+            t5 = AddCarry(Unsafe.Add(ref high, i), carry, ref topCarry);
+        }
+        // |value|<3pR yields a quotient in (-3p,4p). Since 4p<2^383,
+        // its sign bit suffices. Add 4p if negative, then reduce by 2p and p.
+        ulong mask = 0 - (t5 >> 63);
+        ulong correctionCarry = 0;
+        ulong h0 = AddCarry(t0, 0xe7fbfffffffeaaacUL & mask, ref correctionCarry);
+        ulong h1 = AddCarry(t1, 0x7aaffffac54ffffeUL & mask, ref correctionCarry);
+        ulong h2 = AddCarry(t2, 0x9cc34a83dac3d890UL & mask, ref correctionCarry);
+        ulong h3 = AddCarry(t3, 0x91dd2e13ce144afdUL & mask, ref correctionCarry);
+        ulong h4 = AddCarry(t4, 0x2c6e9ed90d2eb35dUL & mask, ref correctionCarry);
+        ulong h5 = AddCarry(t5, 0x680447a8e5ff9a69UL & mask, ref correctionCarry);
+        ulong subtractCarry = 0;
+        ulong d0 = AddCarry(h0, 0x8c0200000000aaaaUL, ref subtractCarry);
+        ulong d1 = AddCarry(h1, 0xc2a800029d580000UL, ref subtractCarry);
+        ulong d2 = AddCarry(h2, 0x319e5abe129e13b7UL, ref subtractCarry);
+        ulong d3 = AddCarry(h3, 0x371168f618f5da81UL, ref subtractCarry);
+        ulong d4 = AddCarry(h4, 0x69c8b0937968a651UL, ref subtractCarry);
+        ulong d5 = AddCarry(h5, 0xcbfddc2b8d0032cbUL, ref subtractCarry);
+        ulong select = ChoiceToMask(subtractCarry);
+        h0 = Select(d0, h0, select);
+        h1 = Select(d1, h1, select);
+        h2 = Select(d2, h2, select);
+        h3 = Select(d3, h3, select);
+        h4 = Select(d4, h4, select);
+        h5 = Select(d5, h5, select);
+        Reduce(out result, h0, h1, h2, h3, h4, h5);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void ReduceWideSmall(out Fp result, in FpWide value)
+    {
+        ref ulong high = ref Unsafe.AsRef(in value.L6);
+        ulong t0 = value.L0;
+        ulong t1 = value.L1;
+        ulong t2 = value.L2;
+        ulong t3 = value.L3;
+        ulong t4 = value.L4;
+        ulong t5 = value.L5;
+        ulong topCarry = 0;
+        for (int i = 0; i < 6; i++)
+        {
+            ulong q = t0 * N0;
+            ulong carry = MulAdd(q, M0, t0, 0, out _);
+            carry = MulAdd(q, M1, t1, carry, out t0);
+            carry = MulAdd(q, M2, t2, carry, out t1);
+            carry = MulAdd(q, M3, t3, carry, out t2);
+            carry = MulAdd(q, M4, t4, carry, out t3);
+            carry = MulAdd(q, M5, t5, carry, out t4);
+            t5 = AddCarry(Unsafe.Add(ref high, i), carry, ref topCarry);
+        }
+        // |value|<pR gives a quotient in (-p,2p); only one correction is needed.
+        ulong mask = 0 - (t5 >> 63);
+        ulong correctionCarry = 0;
+        ulong h0 = AddCarry(t0, M0 & mask, ref correctionCarry);
+        ulong h1 = AddCarry(t1, M1 & mask, ref correctionCarry);
+        ulong h2 = AddCarry(t2, M2 & mask, ref correctionCarry);
+        ulong h3 = AddCarry(t3, M3 & mask, ref correctionCarry);
+        ulong h4 = AddCarry(t4, M4 & mask, ref correctionCarry);
+        ulong h5 = AddCarry(t5, M5 & mask, ref correctionCarry);
+        Reduce(out result, h0, h1, h2, h3, h4, h5);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void AddWide(out FpWide result, in FpWide a, in FpWide b)
+    {
+        ulong carry = 0;
+        result.L0 = AddCarry(a.L0, b.L0, ref carry);
+        result.L1 = AddCarry(a.L1, b.L1, ref carry);
+        result.L2 = AddCarry(a.L2, b.L2, ref carry);
+        result.L3 = AddCarry(a.L3, b.L3, ref carry);
+        result.L4 = AddCarry(a.L4, b.L4, ref carry);
+        result.L5 = AddCarry(a.L5, b.L5, ref carry);
+        result.L6 = AddCarry(a.L6, b.L6, ref carry);
+        result.L7 = AddCarry(a.L7, b.L7, ref carry);
+        result.L8 = AddCarry(a.L8, b.L8, ref carry);
+        result.L9 = AddCarry(a.L9, b.L9, ref carry);
+        result.L10 = AddCarry(a.L10, b.L10, ref carry);
+        result.L11 = AddCarry(a.L11, b.L11, ref carry);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void AddWideInline(out FpWide result, in FpWide a, in FpWide b)
+    {
+        ulong carry = 0;
+        result.L0 = AddCarry(a.L0, b.L0, ref carry);
+        result.L1 = AddCarry(a.L1, b.L1, ref carry);
+        result.L2 = AddCarry(a.L2, b.L2, ref carry);
+        result.L3 = AddCarry(a.L3, b.L3, ref carry);
+        result.L4 = AddCarry(a.L4, b.L4, ref carry);
+        result.L5 = AddCarry(a.L5, b.L5, ref carry);
+        result.L6 = AddCarry(a.L6, b.L6, ref carry);
+        result.L7 = AddCarry(a.L7, b.L7, ref carry);
+        result.L8 = AddCarry(a.L8, b.L8, ref carry);
+        result.L9 = AddCarry(a.L9, b.L9, ref carry);
+        result.L10 = AddCarry(a.L10, b.L10, ref carry);
+        result.L11 = AddCarry(a.L11, b.L11, ref carry);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void SubtractWide(out FpWide result, in FpWide a, in FpWide b)
+    {
+        ulong borrow = 0;
+        result.L0 = SubBorrow(a.L0, b.L0, ref borrow);
+        result.L1 = SubBorrow(a.L1, b.L1, ref borrow);
+        result.L2 = SubBorrow(a.L2, b.L2, ref borrow);
+        result.L3 = SubBorrow(a.L3, b.L3, ref borrow);
+        result.L4 = SubBorrow(a.L4, b.L4, ref borrow);
+        result.L5 = SubBorrow(a.L5, b.L5, ref borrow);
+        result.L6 = SubBorrow(a.L6, b.L6, ref borrow);
+        result.L7 = SubBorrow(a.L7, b.L7, ref borrow);
+        result.L8 = SubBorrow(a.L8, b.L8, ref borrow);
+        result.L9 = SubBorrow(a.L9, b.L9, ref borrow);
+        result.L10 = SubBorrow(a.L10, b.L10, ref borrow);
+        result.L11 = SubBorrow(a.L11, b.L11, ref borrow);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void SubtractWideInline(out FpWide result, in FpWide a, in FpWide b)
+    {
+        ulong borrow = 0;
+        result.L0 = SubBorrow(a.L0, b.L0, ref borrow);
+        result.L1 = SubBorrow(a.L1, b.L1, ref borrow);
+        result.L2 = SubBorrow(a.L2, b.L2, ref borrow);
+        result.L3 = SubBorrow(a.L3, b.L3, ref borrow);
+        result.L4 = SubBorrow(a.L4, b.L4, ref borrow);
+        result.L5 = SubBorrow(a.L5, b.L5, ref borrow);
+        result.L6 = SubBorrow(a.L6, b.L6, ref borrow);
+        result.L7 = SubBorrow(a.L7, b.L7, ref borrow);
+        result.L8 = SubBorrow(a.L8, b.L8, ref borrow);
+        result.L9 = SubBorrow(a.L9, b.L9, ref borrow);
+        result.L10 = SubBorrow(a.L10, b.L10, ref borrow);
+        result.L11 = SubBorrow(a.L11, b.L11, ref borrow);
+    }
+
+}

@@ -1,0 +1,9 @@
+Nethermind.Crypto.BlsNet
+
+Algorithms, formulas and constants are ported from blst by Supranational,
+https://github.com/supranational/blst, commit
+f62244ef50ad1a603decdb8f215e982d2a467bb6.
+
+blst copyright (c) 2019-2020 Supranational LLC.
+The port and upstream blst are distributed under the Apache License 2.0.
+See LICENSE.

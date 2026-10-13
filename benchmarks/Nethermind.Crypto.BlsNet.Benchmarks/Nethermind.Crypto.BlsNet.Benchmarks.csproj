@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <TargetFramework>net11.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Nethermind.Crypto.BlsNet/Nethermind.Crypto.BlsNet.csproj" />
+  </ItemGroup>
+  <ItemGroup><Compile Include="../../tests/NativeBlstLoader.cs" Link="NativeBlstLoader.cs" /></ItemGroup>
+</Project>

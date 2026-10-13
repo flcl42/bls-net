@@ -1,3 +1,2 @@
-*.pl linguist-language=assembly
-*.h linguist-language=c
-*.tgo linguist-language=go
+* text=auto
+*.patch -text

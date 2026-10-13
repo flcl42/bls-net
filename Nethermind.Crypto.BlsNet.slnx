@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="src/Nethermind.Crypto.BlsNet/Nethermind.Crypto.BlsNet.csproj" />
+  <Project Path="tests/Nethermind.Crypto.BlsNet.Tests/Nethermind.Crypto.BlsNet.Tests.csproj" />
+  <Project Path="tests/Nethermind.Crypto.BlsNet.CurveTests/Nethermind.Crypto.BlsNet.CurveTests.csproj" />
+  <Project Path="tests/Nethermind.Crypto.BlsNet.PairingTests/Nethermind.Crypto.BlsNet.PairingTests.csproj" />
+  <Project Path="benchmarks/Nethermind.Crypto.BlsNet.Benchmarks/Nethermind.Crypto.BlsNet.Benchmarks.csproj" />
+</Solution>
