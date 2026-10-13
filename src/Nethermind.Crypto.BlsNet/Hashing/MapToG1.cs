@@ -23,9 +23,12 @@ public static class MapToG1
         CurveField<Fp>.Square(out Fp tv4, gxd); CurveField<Fp>.Multiply(out tv2, gx1, gxd);
         CurveField<Fp>.Multiply(out tv4, tv4, tv2); bool square = FieldRoots.ReciprocalSqrt(out Fp y1, tv4);
         CurveField<Fp>.Multiply(out y1, y1, tv2);
-        CurveField<Fp>.Multiply(out Fp y2, y1, sqrt_minus_ZZZ);
-        CurveField<Fp>.Multiply(out y2, y2, uu); CurveField<Fp>.Multiply(out y2, y2, u);
-        Fp x = square ? x1 : x2, y = square ? y1 : y2;
+        Fp x = square ? x1 : x2, y = y1;
+        if (!square)
+        {
+            CurveField<Fp>.Multiply(out y, y, sqrt_minus_ZZZ);
+            CurveField<Fp>.Multiply(out y, y, uu); CurveField<Fp>.Multiply(out y, y, u);
+        }
         if (Fp.Sgn0(u) != Fp.Sgn0(y)) CurveField<Fp>.Negate(out y, y);
         CurveField<Fp>.Multiply(out x, x, xd); CurveField<Fp>.Multiply(out y, y, gxd);
         Jacobian<Fp> p = new(x, y, xd);

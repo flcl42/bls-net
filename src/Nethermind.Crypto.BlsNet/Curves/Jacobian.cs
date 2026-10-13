@@ -18,6 +18,7 @@ public struct Jacobian<T> where T : struct, IField<T>
     public readonly void ToAffine(out T x, out T y)
     {
         if (IsInfinity) { x = y = T.Zero; return; }
+        if (T.AreEqual(Z, T.One)) { x = X; y = Y; return; }
         CurveField<T>.Inverse(out T zi, Z); CurveField<T>.Square(out T zz, zi);
         CurveField<T>.Multiply(out x, X, zz); CurveField<T>.Multiply(out zz, zz, zi); CurveField<T>.Multiply(out y, Y, zz);
     }

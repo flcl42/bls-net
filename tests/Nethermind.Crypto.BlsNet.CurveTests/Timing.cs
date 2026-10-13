@@ -8,6 +8,16 @@ internal static unsafe partial class Program
 {
     private static void Measure(string name, int iterations, Action managed, Action native)
     {
+        bool shortRounds = Environment.GetEnvironmentVariable("BLST_BENCH_ROUND_MS") is not null;
+        if (shortRounds)
+        {
+            for (int i = 0; i < 10; i++) managed();
+            long start = Stopwatch.GetTimestamp();
+            for (int i = 0; i < 10; i++) managed();
+            double perOperation = (Stopwatch.GetTimestamp() - start) / (double)Stopwatch.Frequency / 10;
+            double target = double.Parse(Environment.GetEnvironmentVariable("BLST_BENCH_ROUND_MS")!, System.Globalization.CultureInfo.InvariantCulture) / 1000;
+            iterations = Math.Min(iterations, Math.Max(1, (int)(target / perOperation)));
+        }
         long warmupStart = Stopwatch.GetTimestamp();
         do
         {
@@ -21,7 +31,7 @@ internal static unsafe partial class Program
         double MeasureOne(Action action)
         {
             double best = double.MaxValue;
-            for (int round = 0; round < 7; round++)
+            for (int round = 0; round < (shortRounds ? 21 : 7); round++)
             {
                 long start = Stopwatch.GetTimestamp();
                 for (int i = 0; i < iterations; i++) action();

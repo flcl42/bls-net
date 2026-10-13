@@ -16,7 +16,6 @@ public static class Pairing
     [SkipLocalsInit]
     private static void LineDouble(out Fp6 line, ref Jacobian t, in Jacobian q)
     {
-        line = default;
         Unsafe.SkipInit(out Jacobian ret);
         Unsafe.SkipInit(out Fp2 ZZ);
         Unsafe.SkipInit(out Fp2 A);
@@ -60,7 +59,6 @@ public static class Pairing
     [SkipLocalsInit]
     private static void LineAdd(out Fp6 line, ref Jacobian t, in Jacobian r, in G2Affine q)
     {
-        line = default;
         Unsafe.SkipInit(out Jacobian ret);
         Unsafe.SkipInit(out Fp2 Z1Z1);
         Unsafe.SkipInit(out Fp2 U2);
@@ -115,9 +113,10 @@ public static class Pairing
     public static void MillerLoop(ReadOnlySpan<G1Affine> p, ReadOnlySpan<G2Affine> q, out Fp12 f)
     {
         if (p.Length != q.Length) throw new ArgumentException("Pair counts must match.");
-        Span<Jacobian> t = stackalloc Jacobian[16];
-        Span<G2Affine> qs = stackalloc G2Affine[16];
-        Span<G1Affine> px2 = stackalloc G1Affine[16];
+        int batchSize = Math.Min(64, p.Length);
+        Span<Jacobian> t = stackalloc Jacobian[batchSize];
+        Span<G2Affine> qs = stackalloc G2Affine[batchSize];
+        Span<G1Affine> px2 = stackalloc G1Affine[batchSize];
         Fp12 acc = Fp12.One;
         bool hasBatch = false;
         int count = 0;
@@ -130,7 +129,7 @@ public static class Pairing
             Fp.Negate(out px2[count].X, px2[count].X);
             Fp.Double(out px2[count].Y, p[i].Y);
             count++;
-            if (count == 16)
+            if (count == batchSize)
             {
                 LoopBatch(out Fp12 batch, t, qs, px2, count);
                 if (!hasBatch) { acc = batch; hasBatch = true; }
@@ -190,7 +189,7 @@ public static class Pairing
         foreach (int run in runs)
         {
             Fp12.Multiply(out ret, ret, a);
-            for (int k = 0; k < run; k++) Fp12.CyclotomicSquare(out ret, ret);
+            Fp12.CyclotomicSquareRepeated(out ret, ret, run);
         }
         Fp12.Conjugate(out result, ret);
     }
@@ -246,6 +245,7 @@ public static class Pairing
     public static bool PairingCheck(ReadOnlySpan<G1Affine> p, ReadOnlySpan<G2Affine> q)
     {
         MillerLoop(p, q, out Fp12 f);
+        if (f.IsOne) return true;
         FinalExponentiation(f, out Fp12 result);
         return result.IsOne;
     }

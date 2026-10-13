@@ -77,21 +77,23 @@ The Fp Montgomery row loop processes two rows per iteration. Three-row and fully
 
 `Jacobian<T>` implements G1 over Fp and G2 over Fp2 through `IField<T>`. Coordinates represent x = X/Z² and y = Y/Z³. Addition, mixed addition, doubling, negation and equality handle infinity, equal points and inverse points. Equality avoids inversion; affine conversion needs one field inversion. Output operations tolerate aliases.
 
-XYZZ buckets retain X, Y, ZZ = Z² and ZZZ = Z³. This saves work in repeated mixed additions and bucket integration. They support signed affine addition and convert back to Jacobian coordinates.
+XYZZ buckets retain X, Y, ZZ = Z² and ZZZ = Z³. This saves work in repeated mixed additions and bucket integration. They support signed affine addition and convert back to Jacobian coordinates. Jacobian affine conversion returns coordinates directly when Z is already one, avoiding an inversion for normalized points and addition with infinity.
 
 `IsOnCurve` checks y² = x³ + 4 for G1 and y² = x³ + 4(1 + u) for G2. `IsInSubgroup` uses Scott's endomorphism tests: the G1 relation uses the cube-root endomorphism and two multiplications by the curve parameter; G2 compares psi(P) with [z]P. Here z = -0xd201000000010000. Infinity passes both checks. Subgroup predicates assume an on-curve point, so callers must check the curve first.
 
 ## Scalar multiplication
 
-Scalars contain exactly 32 little-endian bytes and are reduced modulo r. G1 uses a GLV split into 128-bit components and its endomorphism. G2 uses four base-|z| GLS digits and successive psi images. Both use joint width-5 wNAF with batch-normalized precomputation tables. These decompositions require subgroup points.
+Scalars contain exactly 32 little-endian bytes and are reduced modulo r. G1 uses a GLV split into 128-bit components and its endomorphism. G2 uses four base-|z| GLS digits and successive psi images. Both use joint width-5 wNAF. Only the original point's eight odd multiples are built and batch-normalized; the remaining tables are its affine endomorphism images. These decompositions require subgroup points.
 
 ## Multi-scalar multiplication
 
 MSM accepts affine subgroup points and contiguous 32-byte little-endian scalars. Invalid scalar lengths throw `ArgumentException`; an empty input returns infinity. Infinity points contribute zero.
 
-The n = 1 path calls scalar multiplication. For 2 ≤ n < 32, signed width-4 tables are normalized with one batch inversion. Larger inputs use Pippenger with signed Booth windows. A bounded little-endian word read extracts digits. With l = floor(log2(n)), the projective window width is l - 3 when l > 12, l - 2 when l > 8, l - 1 when l > 4, and 2 otherwise. XYZZ buckets accumulate signed points; descending running sums integrate the buckets.
+The n = 1 path calls scalar multiplication. G1 inputs with 2 ≤ n < 1,024 expand to 2n GLV points with 128-bit scalars. G2 inputs with n ≥ 2 expand to 4n GLS points with 64-bit scalars. G1 at n ≥ 1,024 retains the 256-bit path because its extra decomposition work did not consistently improve large batches. The expanded scalars are reduced first, and the unused bytes in their 32-byte slots are cleared. Window extraction includes a carry window above the highest scalar bit.
 
-Large inputs group points by signed digit and reduce each bucket in balanced affine-addition rounds. One Montgomery batch inversion supplies all slopes in a round. Repeated points use doubling, inverse points cancel, and infinity is skipped. Batch-affine accumulation uses max(2, projective window width - 1).
+For fewer than 32 effective points, and for exactly 32 effective points after decomposition, signed width-4 tables are normalized with one batch inversion. Decomposed small MSMs build tables for the original points and derive the other tables with endomorphisms. Larger inputs use Pippenger with signed Booth windows. A bounded little-endian word read extracts digits. With l = floor(log2(effective point count)), the projective window width is l - 3 when l > 12, l - 2 when l > 8, l - 1 when l > 4, and 2 otherwise. The 128-bit path uses one smaller window for 128–256 effective points. XYZZ buckets accumulate signed points; descending running sums integrate the buckets.
+
+Large inputs group points by signed digit and reduce each bucket in balanced affine-addition rounds. One Montgomery batch inversion supplies all slopes in a round. Repeated points use doubling, inverse points cancel, and infinity is skipped. Batch-affine accumulation uses max(2, projective window width - 1). The thresholds below count effective points after decomposition (so G2 net11.0 begins at 32 original points).
 
 | Group and runtime policy | Batch-affine threshold |
 |---|---:|
@@ -121,9 +123,11 @@ public static bool PairingCheck(ReadOnlySpan<G1Affine> p,
     ReadOnlySpan<G2Affine> q);
 ```
 
-Miller loops use blst's line formulas and negative-z schedule. Up to 16 active pairs share a pass with bounded stack storage and shared accumulator squarings. Larger inputs multiply the pass results. Infinity pairs are skipped. Sparse Fp12 multiplication evaluates line coefficients at each G1 point. Conjugation accounts for the negative curve parameter.
+Miller loops use blst's line formulas and negative-z schedule. Up to 64 active pairs share a pass with bounded stack storage and shared accumulator squarings. Scratch spans are sized to min(64, input count); larger inputs multiply the pass results. Infinity pairs are skipped. Sparse Fp12 multiplication evaluates line coefficients at each G1 point. Conjugation accounts for the negative curve parameter. Every line coordinate is assigned before use, without clearing the line buffer first.
 
-Final exponentiation first uses inversion, conjugation and a Frobenius map to enter the cyclotomic subgroup. The hard part follows blst's fixed chain of powers of z and z/2, cyclotomic squarings, conjugations and Frobenius maps. `PairingCheck` tests whether the result is one.
+Final exponentiation first uses inversion, conjugation and a Frobenius map to enter the cyclotomic subgroup. The hard part follows blst's fixed chain of powers of z and z/2. Runs of at least 15 squarings use Karabina compression (ePrint 2010/542, Theorems 3.1–3.2), retaining C0.C1, C0.C2, C1.C0 and C1.C2. Two Fp4 squares update them; one Fp2 inversion reconstructs the omitted coefficients at the end of each run. The zero and identity cases are handled explicitly. The internal repeated-square helper requires a cyclotomic input or zero and tolerates output/input aliasing; arbitrary Fp12 inputs must use ordinary squaring.
+
+Frobenius maps specialize multiplication by real, imaginary, unit and conjugate-pair constants. `PairingCheck` tests whether the final result is one and returns immediately when the Miller product is already one. Affine infinity subgroup checks also return immediately.
 
 Mismatched span lengths throw `ArgumentException`. Empty or all-infinity loops return one, and their checks return true. Callers must validate curves and subgroups; pairing does not perform those checks.
 

@@ -23,6 +23,41 @@ internal static unsafe partial class Program
             Fp12.FrobeniusMap(out product, a, 2); Equal(reverse, product, "tower Frobenius composition");
         }
         Fp12.Inverse(out Fp12 zero, Fp12.Zero); Check(zero.IsZero, "tower inverse zero");
+        CompressedSquareTests();
         Console.WriteLine("Tower: 2,500 managed identities and aliases passed.");
+    }
+
+    private static void CompressedSquareTests()
+    {
+        for (int trial = 0; trial < 128; trial++)
+        {
+            Fp12 input = trial == 0 ? Fp12.One : trial == 1 ? Fp12.Zero : Field12();
+            if (trial > 1)
+            {
+                // The easy part enters the entire cyclotomic subgroup, rather
+                // than restricting this test to the prime-order target group.
+                Fp12.Conjugate(out Fp12 conjugate, input);
+                Fp12.Inverse(out Fp12 inverse, input);
+                Fp12.Multiply(out input, conjugate, inverse);
+                Fp12.FrobeniusMap(out inverse, input, 2);
+                Fp12.Multiply(out input, input, inverse);
+            }
+            foreach (int count in new[] { 0, 1, 2, 9, 14, 15, 16, 32, 63, 128 })
+            {
+                Fp12 expected = input;
+                for (int i = 0; i < count; i++) Fp12.Square(out expected, expected);
+                Fp12.CyclotomicSquareRepeated(out Fp12 actual, input, count);
+                Equal(actual, expected, "compressed square vs ordinary square");
+                Fp12 alias = input;
+                Fp12.CyclotomicSquareRepeated(out alias, alias, count);
+                Equal(alias, expected, "compressed square alias");
+                if (NativeAvailable)
+                {
+                    Fp12 native = input;
+                    for (int i = 0; i < count; i++) Native.blst_fp12_cyclotomic_sqr(out native, native);
+                    Equal(actual, native, "compressed square vs native");
+                }
+            }
+        }
     }
 }

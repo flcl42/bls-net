@@ -2,6 +2,12 @@ using System.Runtime.InteropServices;
 
 internal static class NativeBlstLoader
 {
+    internal static void PinBenchmarkProcessor()
+    {
+        if (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("BLST_BENCH_PROCESSOR") is string processor)
+            System.Diagnostics.Process.GetCurrentProcess().ProcessorAffinity = (nint)(1L << int.Parse(processor));
+    }
+
     internal static bool TryLoad(out nint handle)
     {
         string fileName = OperatingSystem.IsWindows() ? "blst.dll" : OperatingSystem.IsMacOS() ? "libblst.dylib" : "libblst.so";

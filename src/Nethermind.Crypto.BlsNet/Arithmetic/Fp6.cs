@@ -188,8 +188,25 @@ public struct Fp6 : IEquatable<Fp6>
             2 => Fp.FromMontgomery(0xcd03c9e48671f071UL, 0x5dab22461fcda5d2UL, 0x587042afd3851b95UL, 0x8eb60ebe01bacb9eUL, 0x03f97d6e83d050d2UL, 0x18f0206554638741UL),
             _ => Fp.FromMontgomery(0x43f5fffffffcaaaeUL, 0x32b7fff2ed47fffdUL, 0x07e83a49a2e99d69UL, 0xeca8f3318332bb7aUL, 0xef148d1ea0f4c069UL, 0x040ab3263eff0206UL),
         };
-        Fp2.Multiply(out ret.C1, ret.C1, coefficient1);
-        Fp2.MultiplyByFp(out ret.C2, ret.C2, coefficient2);
+        if (n == 1)
+        {
+            Fp.MultiplyComposite(out Fp real, ret.C1.C1, coefficient1.C1);
+            Fp.MultiplyComposite(out ret.C1.C1, ret.C1.C0, coefficient1.C1);
+            Fp.Negate(out ret.C1.C0, real);
+            Fp2.MultiplyByFp(out ret.C2, ret.C2, coefficient2);
+        }
+        else if (n == 2)
+        {
+            Fp2.MultiplyByFp(out ret.C1, ret.C1, coefficient1.C0);
+            Fp2.MultiplyByFp(out ret.C2, ret.C2, coefficient2);
+        }
+        else
+        {
+            Fp real = ret.C1.C0;
+            Fp.Negate(out ret.C1.C0, ret.C1.C1);
+            ret.C1.C1 = real;
+            Fp2.Negate(out ret.C2, ret.C2);
+        }
         result = ret;
     }
 }

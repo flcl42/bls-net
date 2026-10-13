@@ -24,6 +24,7 @@ internal static unsafe partial class Program
     private static Fp2 RandomFp2() => new(RandomFp(), RandomFp());
     public static void Main(string[] args)
     {
+        NativeBlstLoader.PinBenchmarkProcessor();
         NativeAvailable = Native.Load();
         if (args.Contains("--bench")) { Benchmark(); return; }
         if (NativeAvailable) { TestG1(); TestG2(); }

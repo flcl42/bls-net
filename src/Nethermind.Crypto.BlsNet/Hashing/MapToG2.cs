@@ -23,9 +23,11 @@ public static class MapToG2
         Fp2.Square(out Fp2 tv4, gxd); Fp2.Multiply(out tv2, gx1, gxd);
         Fp2.Multiply(out tv4, tv4, tv2); bool square = FieldRoots.ReciprocalSqrt(out Fp2 y1, tv4);
         Fp2.Multiply(out y1, y1, tv2);
-        Fp2 y2 = y1;
-        Fp2.Multiply(out y2, y2, uu); Fp2.Multiply(out y2, y2, u);
-        Fp2 x = square ? x1 : x2, y = square ? y1 : y2;
+        Fp2 x = square ? x1 : x2, y = y1;
+        if (!square)
+        {
+            Fp2.Multiply(out y, y, uu); Fp2.Multiply(out y, y, u);
+        }
         if (Fp2.Sgn0(u) != Fp2.Sgn0(y)) Fp2.Negate(out y, y);
         Fp2.Multiply(out x, x, xd); Fp2.Multiply(out y, y, gxd);
         Jacobian<Fp2> p = new(x, y, xd);

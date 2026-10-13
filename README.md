@@ -47,13 +47,13 @@ Not implemented: hash-to-field and message hash-to-curve with DST, a BLS signatu
 
 ## Build and test
 
-Install the .NET 11 SDK selected by `global.json` (`11.0.100-rc.1.26425.128`, with `latestFeature` roll-forward enabled). The library targets `net10.0;net11.0`; test and benchmark runners target `net11.0`. Run these commands from the repository root:
+Install the .NET 11 SDK selected by `global.json` (`11.0.100-rc.1.26425.128`, with `latestFeature` roll-forward enabled). The library targets `net10.0;net11.0`; test runners target `net10.0;net11.0`, and the field benchmark runner targets `net11.0`. Run these commands from the repository root:
 
 ```powershell
 dotnet build Nethermind.Crypto.BlsNet.slnx -c Release
-dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release
-dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release
-dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release
+dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release -f net11.0
+dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -f net11.0
+dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0
 dotnet pack src/Nethermind.Crypto.BlsNet -c Release -o artifacts/packages
 ```
 
@@ -62,8 +62,8 @@ These are console test runners: use `dotnet run`, not `dotnet test`. Building an
 ```powershell
 git submodule update --init --depth 1 external/blst
 ./scripts/build-native-blst.ps1
-dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release
-dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release
+dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -f net11.0
+dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0
 ```
 
 The script downloads MinGW/w64devkit when needed, detects ADX/BMI2, and builds `artifacts/native/blst.dll` from the pinned upstream submodule. Native loaders search `artifacts/native/` while walking parent directories, then support the old parent-directory DLL location. The native build script targets Windows x64.
@@ -72,8 +72,8 @@ The script downloads MinGW/w64devkit when needed, detects ADX/BMI2, and builds `
 
 ```powershell
 dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release
-dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -- --bench
-dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -- --timing
+dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -f net11.0 -- --bench
+dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0 -- --timing
 ```
 
 All runners measure managed operations without native blst; native columns are skipped when it is missing. The EIP-2537 precompile results below use Nethermind's BenchmarkDotNet in-process Short job on a Ryzen 9 9950X3D VM with Windows 11. The native baseline is Nethermind.Crypto.Bls 0.3.17.15; the patched JIT is .NET 12.0.0-dev at runtime PR #134039 revision `331fa2b3` plus the carry-row patch.

@@ -6,6 +6,11 @@ internal static unsafe partial class Program
 {
     private static void TestPropertiesAndAllocations()
     {
+        TestScalarSplits();
+        G1Affine normalized1 = G1Projective.FromAffine(G1Affine.Generator).ToAffine();
+        G2Affine normalized2 = G2Projective.FromAffine(G2Affine.Generator).ToAffine();
+        Check(Fp.AreEqual(normalized1.X, G1Affine.Generator.X) && Fp.AreEqual(normalized1.Y, G1Affine.Generator.Y), "normalized G1 affine conversion");
+        Check(Fp2.AreEqual(normalized2.X, G2Affine.Generator.X) && Fp2.AreEqual(normalized2.Y, G2Affine.Generator.Y), "normalized G2 affine conversion");
         Fp.Negate(out Fp minusOne, Fp.One);
         foreach (Fp u in new[] { Fp.Zero, Fp.One, minusOne })
         {
@@ -126,6 +131,31 @@ internal static unsafe partial class Program
                 long allocated = GC.GetAllocatedBytesForCurrentThread() - start;
                 Check(allocated == 0, $"G2 allocations n={count}: {allocated}");
             }
+        }
+    }
+
+    private static void TestScalarSplits()
+    {
+        Span<UInt128> glv = stackalloc UInt128[2];
+        Span<ulong> gls = stackalloc ulong[4];
+        System.Numerics.BigInteger absZ = 0xd201000000010000UL;
+        for (int i = 0; i < 768 + Edges.Length; i++)
+        {
+            byte[] scalar = i < Edges.Length ? Edges[i] : i < 256 + Edges.Length
+                ? Scalar(BigIntegerOne << (i - Edges.Length)) : new byte[32];
+            if (i >= 256 + Edges.Length) Rng.NextBytes(scalar);
+            System.Numerics.BigInteger reduced = new System.Numerics.BigInteger(scalar, isUnsigned: true) % Order;
+            ScalarMultiplication.SplitG1Scalar(scalar, glv);
+            ScalarMultiplication.SplitG2Scalar(scalar, gls);
+            Check((System.Numerics.BigInteger)glv[0] + (System.Numerics.BigInteger)glv[1] * absZ * absZ == reduced, "GLV scalar reconstruction");
+            Check((System.Numerics.BigInteger)glv[0] < absZ * absZ, "GLV remainder bound");
+            System.Numerics.BigInteger reconstructed = 0;
+            for (int j = 3; j >= 0; j--)
+            {
+                Check(gls[j] < absZ, "GLS digit bound");
+                reconstructed = reconstructed * absZ + gls[j];
+            }
+            Check(reconstructed == reduced, "GLS scalar reconstruction");
         }
     }
     private static System.Numerics.BigInteger BigIntegerOne => System.Numerics.BigInteger.One;

@@ -14,6 +14,7 @@ public static class MultiScalarMultiplication
     {
         Validate(points.Length, scalars);
         if (points.Length == 1) { ScalarMultiplication.Multiply(points[0], scalars, out r); return; }
+        if (points.Length is >= 2 and < 1024) { G1Msm.Multiply(points, scalars, out r.Value); return; }
         Msm<Fp>.Multiply(MemoryMarshal.Cast<G1Affine, Affine<Fp>>(points), scalars, out r.Value);
     }
 
@@ -22,6 +23,7 @@ public static class MultiScalarMultiplication
     {
         Validate(points.Length, scalars);
         if (points.Length == 1) { ScalarMultiplication.Multiply(points[0], scalars, out r); return; }
+        if (points.Length >= 2) { G2Msm.Multiply(points, scalars, out r.Value); return; }
         Msm<Fp2>.Multiply(MemoryMarshal.Cast<G2Affine, Affine<Fp2>>(points), scalars, out r.Value);
     }
 
@@ -40,26 +42,27 @@ internal struct Affine<T> where T : unmanaged, IField<T>
 
 internal static class Msm<T> where T : unmanaged, IField<T>
 {
-    internal static void Multiply(ReadOnlySpan<Affine<T>> points, ReadOnlySpan<byte> scalars, out Jacobian<T> r)
+    internal static void Multiply(ReadOnlySpan<Affine<T>> points, ReadOnlySpan<byte> scalars, out Jacobian<T> r, int bits = 256)
     {
         r = default; if (points.IsEmpty) return;
-        if (points.Length < 32) { Small(points, scalars, out r); return; }
+        if (points.Length < 32 || bits < 256 && points.Length <= 32) { Small(points, scalars, out r, bits); return; }
         int log = BitOperations.Log2((uint)points.Length);
         int w = log > 12 ? log - 3 : log > 8 ? log - 2 : log > 4 ? log - 1 : 2;
+        if (bits == 128 && points.Length is >= 128 and <= 256) w = Math.Max(2, w - 1);
         int count = 1 << (w - 1);
         // .NET 10's Fp2 carry kernels favor XYZZ; newer JITs benefit from affine batches.
         int batchThreshold = typeof(T) == typeof(Fp2) ? (Fp.UseExpandedKernels ? 128 : int.MaxValue) : 512;
         if (points.Length >= batchThreshold)
         {
             int batchWindow = Math.Max(2, w - 1);
-            BatchAffine(points, scalars, 1 << (batchWindow - 1), batchWindow, out r);
+            BatchAffine(points, scalars, 1 << (batchWindow - 1), batchWindow, out r, bits);
             return;
         }
         Xyzz<T>[] rented = ArrayPool<Xyzz<T>>.Shared.Rent(count);
         try
         {
             Span<Xyzz<T>> buckets = rented.AsSpan(0, count);
-            for (int bit = (256 / w) * w; bit >= 0; bit -= w)
+            for (int bit = (bits / w) * w; bit >= 0; bit -= w)
             {
                 for (int j = 0; j < w; j++) Jacobian<T>.Double(out r, r);
                 buckets.Clear();
@@ -84,7 +87,7 @@ internal static class Msm<T> where T : unmanaged, IField<T>
     // Group signed points by window digit, then reduce each bucket in parallel rounds.
     // One Montgomery batch inversion covers all affine slopes in each round.
     private static void BatchAffine(ReadOnlySpan<Affine<T>> points, ReadOnlySpan<byte> scalars,
-        int bucketCount, int window, out Jacobian<T> result)
+        int bucketCount, int window, out Jacobian<T> result, int bits)
     {
         int n = points.Length, maxPairs = (n + 1) / 2;
         Affine<T>[] wa = ArrayPool<Affine<T>>.Shared.Rent(n), wb = ArrayPool<Affine<T>>.Shared.Rent(n);
@@ -102,7 +105,7 @@ internal static class Msm<T> where T : unmanaged, IField<T>
             Span<int> cursor = cursors.AsSpan(0, bucketCount);
             Span<T> denominators = den.AsSpan(0, maxPairs), numerators = num.AsSpan(0, maxPairs), prefixes = prefix.AsSpan(0, maxPairs);
             result = default;
-            for (int bit = (256 / window) * window; bit >= 0; bit -= window)
+            for (int bit = (bits / window) * window; bit >= 0; bit -= window)
             {
                 for (int j = 0; j < window; j++) Jacobian<T>.Double(out result, result);
                 counts.Clear();
@@ -210,7 +213,7 @@ internal static class Msm<T> where T : unmanaged, IField<T>
         }
     }
 
-    private static void Small(ReadOnlySpan<Affine<T>> points, ReadOnlySpan<byte> scalars, out Jacobian<T> r)
+    private static void Small(ReadOnlySpan<Affine<T>> points, ReadOnlySpan<byte> scalars, out Jacobian<T> r, int bits)
     {
         const int w = 4, entries = 8;
         int length = points.Length * entries;
@@ -219,15 +222,46 @@ internal static class Msm<T> where T : unmanaged, IField<T>
         try
         {
             Span<Jacobian<T>> table = rented.AsSpan(0, length);
-            for (int j = 0; j < points.Length; j++)
+            bool gls = bits == 64 && typeof(T) == typeof(Fp2);
+            bool glv = bits == 128 && typeof(T) == typeof(Fp);
+            int factor = gls ? 4 : glv ? 2 : 1;
+            int independentCount = points.Length / factor;
+            for (int j = 0; j < independentCount; j++)
             {
                 int row = j * entries;
-                Jacobian<T>.FromAffine(out table[row], points[j].X, points[j].Y);
+                ref readonly Affine<T> point = ref points[j * factor];
+                Jacobian<T>.FromAffine(out table[row], point.X, point.Y);
                 for (int i = 1; i < entries; i++)
-                    Jacobian<T>.AddAffine(out table[row + i], table[row + i - 1], points[j].X, points[j].Y);
+                    Jacobian<T>.AddAffine(out table[row + i], table[row + i - 1], point.X, point.Y);
             }
-            Jacobian<T>.BatchToAffine(table, products.AsSpan(0, length)); r = default;
-            for (int bit = 256; bit >= 0; bit -= w)
+            Jacobian<T>.BatchToAffine(table[..(independentCount * entries)], products);
+            if (gls)
+            {
+                Span<Jacobian<Fp2>> g2Table = MemoryMarshal.Cast<Jacobian<T>, Jacobian<Fp2>>(table);
+                for (int j = independentCount - 1; j >= 0; j--)
+                {
+                    g2Table.Slice(j * entries, entries).CopyTo(g2Table.Slice(j * 4 * entries, entries));
+                    for (int k = 1; k < 4; k++)
+                        for (int i = 0; i < entries; i++)
+                        {
+                            int index = (j * 4 + k) * entries + i;
+                            G2Projective.Psi(out g2Table[index], g2Table[index - entries]);
+                            Jacobian<Fp2>.Negate(out g2Table[index], g2Table[index]);
+                        }
+                }
+            }
+            else if (glv)
+            {
+                Span<Jacobian<Fp>> g1Table = MemoryMarshal.Cast<Jacobian<T>, Jacobian<Fp>>(table);
+                for (int j = independentCount - 1; j >= 0; j--)
+                {
+                    g1Table.Slice(j * entries, entries).CopyTo(g1Table.Slice(j * 2 * entries, entries));
+                    for (int i = 0; i < entries; i++)
+                        G1Msm.Endomorphism(out g1Table[(j * 2 + 1) * entries + i], g1Table[j * 2 * entries + i]);
+                }
+            }
+            r = default;
+            for (int bit = (bits / w) * w; bit >= 0; bit -= w)
             {
                 for (int j = 0; j < w; j++) Jacobian<T>.Double(out r, r);
                 for (int j = 0; j < points.Length; j++)

@@ -79,6 +79,7 @@ public struct Fp12 : IEquatable<Fp12>
 
     /// <summary>Cyclotomic square; equals Square on the cyclotomic subgroup. Inputs may alias the result.</summary>
     [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     public static void CyclotomicSquare(out Fp12 result, in Fp12 a)
     {
         Unsafe.SkipInit(out Fp4 t0);
@@ -124,6 +125,71 @@ public struct Fp12 : IEquatable<Fp12>
         Fp2.Subtract(out ret.C1, ret.C1, t0);
         Fp2.Subtract(out ret.C1, ret.C1, t1);
         result = ret;
+    }
+
+    // Karabina, ePrint 2010/542, Theorems 3.1 and 3.2. The two omitted
+    // coefficients do not feed these four coordinates during squaring.
+    // Only cyclotomic inputs (or zero) are valid for this internal operation.
+    [SkipLocalsInit]
+    internal static void CyclotomicSquareRepeated(out Fp12 result, in Fp12 a, int count)
+    {
+        if (count < 15 || a.IsZero)
+        {
+            Fp12 ret = a;
+            for (int i = 0; i < count; i++) CyclotomicSquare(out ret, ret);
+            result = ret;
+            return;
+        }
+        Fp2 g1 = a.C0.C1, g2 = a.C0.C2, g3 = a.C1.C0, g5 = a.C1.C2;
+        for (int i = 0; i < count; i++)
+        {
+            SquareFp4(out Fp4 t1, g3, g2);
+            SquareFp4(out Fp4 t2, g1, g5);
+            Fp2.Subtract(out g1, t1.C0, g1);
+            Fp2.Double(out g1, g1);
+            Fp2.Add(out g1, g1, t1.C0);
+            Fp2.Subtract(out g2, t2.C0, g2);
+            Fp2.Double(out g2, g2);
+            Fp2.Add(out g2, g2, t2.C0);
+            Fp2.MulByNonResidue(out t2.C1, t2.C1);
+            Fp2.Add(out g3, t2.C1, g3);
+            Fp2.Double(out g3, g3);
+            Fp2.Add(out g3, g3, t2.C1);
+            Fp2.Add(out g5, t1.C1, g5);
+            Fp2.Double(out g5, g5);
+            Fp2.Add(out g5, g5, t1.C1);
+        }
+        Fp2 numerator, denominator;
+        if (g3.IsZero)
+        {
+            if (g2.IsZero) { result = One; return; }
+            Fp2.Multiply(out numerator, g1, g5);
+            Fp2.Double(out numerator, numerator);
+            denominator = g2;
+        }
+        else
+        {
+            Fp2.Square(out Fp2 t0, g1);
+            Fp2.Subtract(out numerator, t0, g2);
+            Fp2.Double(out numerator, numerator);
+            Fp2.Add(out numerator, numerator, t0);
+            Fp2.Square(out t0, g5);
+            Fp2.MulByNonResidue(out t0, t0);
+            Fp2.Add(out numerator, numerator, t0);
+            Fp2.MulBy4(out denominator, g3);
+        }
+        Fp2.Inverse(out denominator, denominator);
+        Fp2.Multiply(out Fp2 g4, numerator, denominator);
+        Fp2.Multiply(out Fp2 product, g2, g1);
+        Fp2.Square(out Fp2 g0, g4);
+        Fp2.Subtract(out g0, g0, product);
+        Fp2.Double(out g0, g0);
+        Fp2.Subtract(out g0, g0, product);
+        Fp2.Multiply(out product, g3, g5);
+        Fp2.Add(out g0, g0, product);
+        Fp2.MulByNonResidue(out g0, g0);
+        Fp2.Add(out g0, g0, Fp2.One);
+        result = new Fp12 { C0 = new Fp6 { C0 = g0, C1 = g1, C2 = g2 }, C1 = new Fp6 { C0 = g3, C1 = g4, C2 = g5 } };
     }
 
     /// <summary>Addition; inputs may alias the result.</summary>
@@ -183,9 +249,18 @@ public struct Fp12 : IEquatable<Fp12>
             2 => new Fp2(Fp.FromMontgomery(0xecfb361b798dba3aUL, 0xc100ddb891865a2cUL, 0x0ec08ff1232bda8eUL, 0xd5c13cc6f1ca4721UL, 0x47222a47bf7b5c04UL, 0x0110f184e51c5f59UL), Fp.Zero),
             _ => new Fp2(Fp.FromMontgomery(0x3e2f585da55c9ad1UL, 0x4294213d86c18183UL, 0x382844c88b623732UL, 0x92ad2afd19103e18UL, 0x1d794e4fac7cf0b9UL, 0x0bd592fc7d825ec8UL), Fp.FromMontgomery(0x7bcfa7a25aa30fdaUL, 0xdc17dec12a927e7cUL, 0x2f088dd86b4ebef1UL, 0xd1ca2087da74d4a7UL, 0x2da2596696cebc1dUL, 0x0e2b7eedbbfd87d2UL)),
         };
-        Fp2.Multiply(out c1.C0, c1.C0, coefficient);
-        Fp2.Multiply(out c1.C1, c1.C1, coefficient);
-        Fp2.Multiply(out c1.C2, c1.C2, coefficient);
+        if (n == 2)
+        {
+            Fp2.MultiplyByFp(out c1.C0, c1.C0, coefficient.C0);
+            Fp2.MultiplyByFp(out c1.C1, c1.C1, coefficient.C0);
+            Fp2.MultiplyByFp(out c1.C2, c1.C2, coefficient.C0);
+        }
+        else
+        {
+            ExtensionConstants.MultiplyConjugatePair(out c1.C0, c1.C0, coefficient.C0);
+            ExtensionConstants.MultiplyConjugatePair(out c1.C1, c1.C1, coefficient.C0);
+            ExtensionConstants.MultiplyConjugatePair(out c1.C2, c1.C2, coefficient.C0);
+        }
         result = new Fp12 { C0 = c0, C1 = c1 };
     }
 }

@@ -60,6 +60,7 @@ public partial struct G1Affine
     /// <summary>Scott's subgroup test; infinity is in the subgroup. Variable-time. Assumes an on-curve point.</summary>
     public readonly bool IsInSubgroup()
     {
+        if (IsInfinity) return true;
         Jacobian<Fp>.FromAffine(out Jacobian<Fp> p, X, Y);
         Jacobian<Fp>.TimesMinusZ(out Jacobian<Fp> t, p);
         Jacobian<Fp>.TimesMinusZ(out t, t); Jacobian<Fp>.Negate(out t, t);

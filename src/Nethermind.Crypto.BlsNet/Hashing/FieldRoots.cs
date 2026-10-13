@@ -17,10 +17,14 @@ public static class FieldRoots
         Fp2.Square(out Fp2 t, candidate);
         if (Fp2.AreEqual(t, a)) { r = candidate; return true; }
         Fp2.Negate(out Fp2 nt, t);
-        if (Fp2.AreEqual(nt, a)) { Fp2.Multiply(out r, candidate, new Fp2(Fp.Zero, Fp.One)); return true; }
+        if (Fp2.AreEqual(nt, a))
+        {
+            Fp real = candidate.C0;
+            Fp.Negate(out r.C0, candidate.C1); r.C1 = real; return true;
+        }
         Fp.Negate(out Fp nc0, t.C0);
         if (Fp2.AreEqual(new Fp2(t.C1, nc0), a))
-        { Fp2.Multiply(out r, candidate, CurveConstants.frobenius_y); return true; }
+        { ExtensionConstants.MultiplyConjugatePair(out r, candidate, CurveConstants.frobenius_y.C0); return true; }
         Fp.Negate(out Fp nc1, t.C1);
         if (Fp2.AreEqual(new Fp2(nc1, t.C0), a))
         { Fp2.Multiply(out r, candidate, new Fp2(CurveConstants.frobenius_y.C1, CurveConstants.frobenius_y.C1)); return true; }

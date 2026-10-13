@@ -46,8 +46,10 @@ public struct G2Projective
         => MultiScalarMultiplication.MultiScalarMultiply(points, scalars, out r);
     internal static void Psi(out Jacobian<Fp2> r, in Jacobian<Fp2> p)
     {
-        Fp2.Conjugate(out Fp2 x, p.X); Fp2.Multiply(out x, x, CurveConstants.frobenius_x);
-        Fp2.Conjugate(out Fp2 y, p.Y); Fp2.Multiply(out y, y, CurveConstants.frobenius_y);
+        Fp.MultiplyComposite(out Fp x0, p.X.C1, CurveConstants.frobenius_x.C1);
+        Fp.MultiplyComposite(out Fp x1, p.X.C0, CurveConstants.frobenius_x.C1);
+        Fp2 x = new(x0, x1);
+        Fp2.Conjugate(out Fp2 y, p.Y); ExtensionConstants.MultiplyConjugatePair(out y, y, CurveConstants.frobenius_y.C0);
         Fp2.Conjugate(out Fp2 z, p.Z); r = new(x, y, z);
     }
 }
@@ -66,6 +68,7 @@ public partial struct G2Affine
     /// <summary>Scott's subgroup test; infinity is in the subgroup. Variable-time. Assumes an on-curve point.</summary>
     public readonly bool IsInSubgroup()
     {
+        if (IsInfinity) return true;
         Jacobian<Fp2>.FromAffine(out Jacobian<Fp2> p, X, Y);
         Jacobian<Fp2>.TimesMinusZ(out Jacobian<Fp2> t, p);
         Jacobian<Fp2>.Negate(out t, t); G2Projective.Psi(out p, p);
