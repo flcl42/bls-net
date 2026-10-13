@@ -8,7 +8,8 @@ internal static class Isogeny<T> where T : unmanaged, IField<T>
     internal static void Apply(out Jacobian<T> r, in Jacobian<T> p, ReadOnlySpan<T> xnMap,
         ReadOnlySpan<T> xdMap, ReadOnlySpan<T> ynMap, ReadOnlySpan<T> ydMap)
     {
-        Span<T> powers = stackalloc T[16]; powers[0] = T.One;
+        int degree = Math.Max(1, Math.Max(Math.Max(xnMap.Length - 1, xdMap.Length), Math.Max(ynMap.Length - 1, ydMap.Length)));
+        Span<T> powers = stackalloc T[degree + 1]; powers[0] = T.One;
         CurveField<T>.Square(out powers[1], p.Z);
         for (int i = 2; i < powers.Length; i++) CurveField<T>.Multiply(out powers[i], powers[i - 1], powers[1]);
         Evaluate(out T xn, p.X, powers, xnMap, false);

@@ -14,9 +14,28 @@ internal struct Fp6Wide { internal Fp2Wide C0, C1, C2; }
 // Narrow inputs and wide output scratch buffers are distinct.
 internal static class WideTower
 {
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void Multiply2(out Fp2Wide result, in Fp2 a, in Fp2 b)
+    {
+        if (Fp.UseExpandedKernels) Multiply2Expanded(out result, a, b);
+        else Multiply2Compact(out result, a, b);
+    }
+
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
-    internal static void Multiply2(out Fp2Wide result, in Fp2 a, in Fp2 b)
+    private static void Multiply2Expanded(out Fp2Wide result, in Fp2 a, in Fp2 b)
+    {
+        Fp.MultiplyWide(out result.C0, a.C0, b.C0);
+        Fp.MultiplyWide(out FpWide t1, a.C1, b.C1);
+        Fp.AddUnreduced(out Fp sa, a.C0, a.C1);
+        Fp.AddUnreduced(out Fp sb, b.C0, b.C1);
+        Fp.MultiplyWide(out result.C1, sa, sb);
+        Fp.SubtractWideProducts(ref result.C0, t1, ref result.C1);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void Multiply2Compact(out Fp2Wide result, in Fp2 a, in Fp2 b)
     {
         Fp.MultiplyWide(out FpWide t0, a.C0, b.C0);
         Fp.MultiplyWide(out FpWide t1, a.C1, b.C1);
@@ -135,6 +154,26 @@ internal static class WideTower
         Multiply2(out result.C2, a.C1, b);
         Multiply2(out result.C1, a.C0, b);
         NonResidue2(out result.C0, t);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void Square6(out Fp6 result, in Fp6 a)
+    {
+        Fp2Fused.SquareWide(out Fp2Wide s0, a.C0);
+        Multiply2(out Fp2Wide m01, a.C0, a.C1); Add2(out m01, m01, m01);
+        Multiply2(out Fp2Wide m12, a.C1, a.C2); Add2(out m12, m12, m12);
+        Fp2Fused.SquareWide(out Fp2Wide s2, a.C2);
+        Fp2.Add(out Fp2 sum, a.C0, a.C1); Fp2.Add(out sum, sum, a.C2);
+        Fp2Fused.SquareWide(out Fp2Wide c2, sum);
+        Subtract2(out c2, c2, s0); Subtract2(out c2, c2, s2);
+        Subtract2(out c2, c2, m01); Subtract2(out c2, c2, m12);
+        NonResidue2(out m12, m12); Add2(out s0, s0, m12);
+        NonResidue2(out s2, s2); Add2(out m01, m01, s2);
+        Reduce2Small(out result.C0, s0);
+        Reduce2Small(out result.C1, m01);
+        // C2 can be negative by up to 12p^2; use the full signed reducer.
+        Reduce2(out result.C2, c2);
     }
 
     [SkipLocalsInit]

@@ -64,6 +64,7 @@ public struct Fp6 : IEquatable<Fp6>
     [SkipLocalsInit]
     public static void Square(out Fp6 result, in Fp6 a)
     {
+        if (Fp.UseExpandedKernels) { WideTower.Square6(out result, a); return; }
         Unsafe.SkipInit(out Fp2 s0);
         Unsafe.SkipInit(out Fp2 m01);
         Unsafe.SkipInit(out Fp2 m12);

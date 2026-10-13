@@ -36,9 +36,11 @@ internal static unsafe partial class Program
         if (args.Contains("--kernel-policy")) { KernelPolicyDiagnostics(); return; }
         if (args.Contains("--kernel-timing")) { KernelTimings(); return; }
         if (args.Contains("--kernel-tests")) { KernelTests(); Console.WriteLine($"Passed {_checks:N0} kernel checks."); return; }
+        if (args.Contains("--fused-tests")) { FusedTowerTests(); Console.WriteLine($"Passed {_checks:N0} fused checks."); return; }
         if (args.Contains("--timing") || args.Contains("--perf")) { Timings(args.Contains("--perf")); return; }
         Check(sizeof(Fp6) == 288 && sizeof(Fp12) == 576, "layout");
         KernelTests();
+        FusedTowerTests();
         InversionTests();
         ManagedTowerTests();
         if (NativeAvailable) TowerTests();
@@ -347,10 +349,10 @@ internal static unsafe partial class Program
         Pair.FinalExponentiation(f, out Fp12 cyclo);
         string[] names = ["Fp inverse", "Fp inverse Fermat", "Fp12 multiply", "Fp12 square", "Cyclotomic square", "Miller 1", "Miller 8", "Final exponentiation", "Pairing check 1", "Pairing check 2", "Pairing check 8", "Fp6 multiply", "Fp6 square", "Fp12 sparse multiply"];
         Console.WriteLine("Operation | managed ns | native ns | managed bytes");
+        string[]? filters = Environment.GetEnvironmentVariable("BLST_BENCH_FILTER")?.Split('|');
         for (int op = quick ? 2 : 0; op < names.Length; op++)
         {
-            string? filter = Environment.GetEnvironmentVariable("BLST_BENCH_FILTER");
-            if (filter is not null && !names[op].Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+            if (filters is not null && !Array.Exists(filters, filter => names[op].Contains(filter, StringComparison.OrdinalIgnoreCase))) continue;
             int iterations = op <= 4 || op >= 11 ? (quick ? 5000 : 30000) : (quick ? 60 : 250);
             if (Environment.GetEnvironmentVariable("BLST_BENCH_ROUND_MS") is not null)
                 iterations = op <= 4 || op >= 11 ? 1000 : 10;

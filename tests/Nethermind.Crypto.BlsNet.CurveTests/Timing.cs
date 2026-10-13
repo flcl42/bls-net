@@ -8,6 +8,8 @@ internal static unsafe partial class Program
 {
     private static void Measure(string name, int iterations, Action managed, Action native)
     {
+        string[]? filters = Environment.GetEnvironmentVariable("BLST_BENCH_FILTER")?.Split('|');
+        if (filters is not null && !Array.Exists(filters, filter => name.Contains(filter, StringComparison.OrdinalIgnoreCase))) return;
         bool shortRounds = Environment.GetEnvironmentVariable("BLST_BENCH_ROUND_MS") is not null;
         if (shortRounds)
         {

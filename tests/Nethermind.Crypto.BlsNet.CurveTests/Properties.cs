@@ -7,6 +7,7 @@ internal static unsafe partial class Program
     private static void TestPropertiesAndAllocations()
     {
         TestScalarSplits();
+        TestIsogenyPolynomials();
         G1Affine normalized1 = G1Projective.FromAffine(G1Affine.Generator).ToAffine();
         G2Affine normalized2 = G2Projective.FromAffine(G2Affine.Generator).ToAffine();
         Check(Fp.AreEqual(normalized1.X, G1Affine.Generator.X) && Fp.AreEqual(normalized1.Y, G1Affine.Generator.Y), "normalized G1 affine conversion");
@@ -66,6 +67,9 @@ internal static unsafe partial class Program
                 G1Projective.Double(p, out rhs); Check(Jacobian<Fp>.AreEqual(jac, new Jacobian<Fp>(rhs.X, rhs.Y, rhs.Z)), "G1 XYZZ double");
                 G1Projective.Double(pq, out lhs); G1Projective.Double(p, out G1Projective dp); G1Projective.Double(q, out G1Projective dq); G1Projective.Add(dp, dq, out rhs);
                 Check(G1Projective.AreEqual(lhs, rhs), "G1 doubling distributes");
+                G1Projective alias = p; G1Projective.Double(alias, out alias); Check(G1Projective.AreEqual(alias, dp), "G1 double output alias");
+                alias = p; G1Projective.Add(alias, q, out alias); Check(G1Projective.AreEqual(alias, pq), "G1 add left output alias");
+                alias = q; G1Projective.Add(p, alias, out alias); Check(G1Projective.AreEqual(alias, pq), "G1 add right output alias");
             }
             byte[] bytes = new byte[32]; Rng.NextBytes(bytes);
             foreach (int count in new[] { 1, 2, 8, 31, 32, 64, 128, 512 })
@@ -119,6 +123,9 @@ internal static unsafe partial class Program
                 G2Projective.Double(p, out rhs); Check(Jacobian<Fp2>.AreEqual(jac, new Jacobian<Fp2>(rhs.X, rhs.Y, rhs.Z)), "G2 XYZZ double");
                 G2Projective.Double(pq, out lhs); G2Projective.Double(p, out G2Projective dp); G2Projective.Double(q, out G2Projective dq); G2Projective.Add(dp, dq, out rhs);
                 Check(G2Projective.AreEqual(lhs, rhs), "G2 doubling distributes");
+                G2Projective alias = p; G2Projective.Double(alias, out alias); Check(G2Projective.AreEqual(alias, dp), "G2 double output alias");
+                alias = p; G2Projective.Add(alias, q, out alias); Check(G2Projective.AreEqual(alias, pq), "G2 add left output alias");
+                alias = q; G2Projective.Add(p, alias, out alias); Check(G2Projective.AreEqual(alias, pq), "G2 add right output alias");
             }
             byte[] bytes = new byte[32]; Rng.NextBytes(bytes);
             foreach (int count in new[] { 1, 2, 8, 31, 32, 64, 128, 512 })

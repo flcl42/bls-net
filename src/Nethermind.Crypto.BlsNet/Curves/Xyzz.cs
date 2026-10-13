@@ -41,7 +41,7 @@ public struct Xyzz<T> where T : struct, IField<T>
     {
         CurveField<T>.Square(out T hh, h); CurveField<T>.Multiply(out T hhh, h, hh); CurveField<T>.Multiply(out T q, u, hh);
         CurveField<T>.Square(out T x, v); CurveField<T>.Subtract(out x, x, hhh); CurveField<T>.Double(out T t, q); CurveField<T>.Subtract(out x, x, t);
-        CurveField<T>.Subtract(out T y, q, x); CurveField<T>.Multiply(out y, y, v); CurveField<T>.Multiply(out t, s, hhh); CurveField<T>.Subtract(out y, y, t);
+        CurveField<T>.Subtract(out T y, q, x); CurveField<T>.MultiplyDifference(out y, y, v, s, hhh);
         CurveField<T>.Multiply(out T rz, zz, hh); CurveField<T>.Multiply(out T rzz, zzz, hhh);
         r = new() { X = x, Y = y, ZZ = rz, ZZZ = rzz };
     }
