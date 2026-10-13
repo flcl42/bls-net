@@ -48,11 +48,7 @@ internal static class Msm<T> where T : unmanaged, IField<T>
         int w = log > 12 ? log - 3 : log > 8 ? log - 2 : log > 4 ? log - 1 : 2;
         int count = 1 << (w - 1);
         // .NET 10's Fp2 carry kernels favor XYZZ; newer JITs benefit from affine batches.
-#if NET10_0
-        int batchThreshold = typeof(T) == typeof(Fp2) ? int.MaxValue : 512;
-#else
-        int batchThreshold = typeof(T) == typeof(Fp2) ? 128 : 512;
-#endif
+        int batchThreshold = typeof(T) == typeof(Fp2) ? (Fp.UseExpandedKernels ? 128 : int.MaxValue) : 512;
         if (points.Length >= batchThreshold)
         {
             int batchWindow = Math.Max(2, w - 1);

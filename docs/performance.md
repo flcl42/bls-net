@@ -55,11 +55,11 @@ From the integrated Nethermind checkout, build and run the runner with the in-pr
 dotnet run --project src/Nethermind/Nethermind.Benchmark.Runner -c Release -- --filter '*Bls12381*' --job Short --inProcess
 ```
 
-Build with `BlsNetSource` set to the library source directory if the linked project needs a path override. Run the same built runner and filter under the patched runtime, using `DOTNET_ROOT` and `DOTNET_ROLL_FORWARD=Major` as below. Include native benchmarks in both runs. The in-process toolchain is required to measure the runtime that launches the runner. The filter also includes managed variants. Record the target framework: G2's batch-affine MSM threshold differs between net10.0 and net11.0 assemblies.
+Build with `BlsNetSource` set to the library source directory if the linked project needs a path override. Run the same built runner and filter under the patched runtime, using `DOTNET_ROOT` and `DOTNET_ROLL_FORWARD=Major` as below. Include native benchmarks in both runs. The in-process toolchain is required to measure the runtime that launches the runner. The filter also includes managed variants. Record the executing runtime, target framework and any `BLSNET_EXPANDED_KERNELS` override: field kernels and the G2 batch-affine threshold now follow runtime policy.
 
 ## Component measurements
 
-The [field-kernel follow-up report](field-kernel-report.md) records newer before/after kernel timings, complete disassembly counts and stress validation. It reduces patched Fp2 multiplication to three raw products and two Montgomery reductions, eliminates carry materialization in the captured field kernels, and preserves compact stock .NET 10 kernels through the target framework. The historical component tables below precede that follow-up. They do not measure the later tower/curve work in other checkouts.
+The [field-kernel follow-up report](field-kernel-report.md) records newer before/after kernel timings, complete disassembly counts and stress validation. It reduces patched Fp2 multiplication to three raw products and two Montgomery reductions, eliminates carry materialization in the captured field kernels, and preserves compact stock .NET 10 kernels. The [round 2 report](field-kernel-round2-report.md) replaces framework selection with a folded runtime policy and records both modes on both library targets, further kernel experiments, and the RDX-copy JIT change. The historical component tables below precede that follow-up. They do not measure the later tower/curve work in other checkouts.
 
 The following tables retain the latest implementation follow-up measurements. They use stock .NET 10.0.12, stock .NET 11 RC1 and the patched launcher identifying itself as .NET 12.0.0-dev. Each native column comes from the same runtime and loop shape as its managed counterpart. These are warmed best-of-round component timings, measured separately from the BenchmarkDotNet precompile means. Input construction, validation, conversion and harness costs differ, so the two sets should not be compared as identical operations. Shared-host contention limits small comparisons.
 
@@ -113,7 +113,7 @@ The curve harness also warms for at least 0.5 s and takes the best of seven roun
 
 ### MSM sweep
 
-Values are µs per operation. Warmed single multiplication and MSM allocate zero heap bytes at the checked sizes; initial pool use can allocate. n = 1 uses scalar multiplication, n < 32 uses signed width-4 tables, and larger inputs use Pippenger. Batch-affine buckets begin at n = 512 for G1 and n = 128 for G2 in the net11.0 assembly. The net10.0 assembly retains XYZZ G2 buckets at all sizes. See [design](design.md#multi-scalar-multiplication).
+Values are µs per operation. Warmed single multiplication and MSM allocate zero heap bytes at the checked sizes; initial pool use can allocate. n = 1 uses scalar multiplication, n < 32 uses signed width-4 tables, and larger inputs use Pippenger. The historical captures used a framework-dependent G2 threshold. Current batch-affine buckets begin at n = 512 for G1 and n = 128 for G2 in expanded mode. Compact mode retains XYZZ G2 buckets at all sizes; both modes are selected by the executing runtime. See [design](design.md#multi-scalar-multiplication).
 
 #### G1
 
@@ -164,7 +164,7 @@ dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -- -
 dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -- --kernel-timing
 ```
 
-The curve and pairing projects target net11.0. Reproducing their .NET 10 measurements requires temporary net10.0 runner projects referencing the net10.0 library; changing only the launcher does not retarget the assembly. Native comparisons require the optional reference build described in the [README](../README.md#build-and-test). Without it, managed timings still run and native columns are skipped.
+The test projects default to net11.0. Build the net10.0 runners with `dotnet build Nethermind.Crypto.BlsNet.slnx -c Release -p:BlsNetTestTargetFramework=net10.0`; changing only the launcher does not retarget the assembly. `scripts/test-field-runtime-matrix.ps1` builds both targets and runs all three suites, kernel tests and optional timing sweeps sequentially, with both kernel modes on every compatible runtime. Native comparisons require the optional reference build described in the [README](../README.md#build-and-test). Without it, managed timings still run and native columns are skipped.
 
 ## Kernel and JIT details
 

@@ -2,7 +2,8 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
-    <TargetFramework>net11.0</TargetFramework>
+    <BlsNetTestTargetFramework Condition="'$(BlsNetTestTargetFramework)' == ''">net11.0</BlsNetTestTargetFramework>
+    <TargetFramework>$(BlsNetTestTargetFramework)</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Optimize>true</Optimize>
   </PropertyGroup>

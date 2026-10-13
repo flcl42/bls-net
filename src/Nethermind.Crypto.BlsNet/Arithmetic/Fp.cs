@@ -219,13 +219,16 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Negate(out Fp result, in Fp value)
     {
-        ulong r0 = M0 - value._l0;
-        ulong borrow = r0 > M0 ? 1UL : 0UL;
-        ulong r1 = SubBorrow(M1, value._l1, ref borrow);
-        ulong r2 = SubBorrow(M2, value._l2, ref borrow);
-        ulong r3 = SubBorrow(M3, value._l3, ref borrow);
-        ulong r4 = SubBorrow(M4, value._l4, ref borrow);
-        ulong r5 = SubBorrow(M5, value._l5, ref borrow);
+        // p - a = p + ~a + 1 modulo 2^384. Express this as an add
+        // chain so constant-left subtractions cannot become NEG/ADD plus
+        // per-limb comparisons before the carry-aware lowering runs.
+        ulong r0 = (M0 + 1) + ~value._l0;
+        ulong carry = r0 < (M0 + 1) ? 1UL : 0UL;
+        ulong r1 = AddCarry(M1, ~value._l1, ref carry);
+        ulong r2 = AddCarry(M2, ~value._l2, ref carry);
+        ulong r3 = AddCarry(M3, ~value._l3, ref carry);
+        ulong r4 = AddCarry(M4, ~value._l4, ref carry);
+        ulong r5 = AddCarry(M5, ~value._l5, ref carry);
 
         ulong mask = ChoiceToMask(NonZeroChoice(value._l0 | value._l1 | value._l2 | value._l3 | value._l4 | value._l5));
         result = new Fp(r0 & mask, r1 & mask, r2 & mask, r3 & mask, r4 & mask, r5 & mask);

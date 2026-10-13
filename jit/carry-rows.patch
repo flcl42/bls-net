@@ -1,5 +1,64 @@
+diff --git a/src/coreclr/jit/emitxarch.cpp b/src/coreclr/jit/emitxarch.cpp
+index 365f01f7..ee1b6e5b 100644
+--- a/src/coreclr/jit/emitxarch.cpp
++++ b/src/coreclr/jit/emitxarch.cpp
+@@ -7873,6 +7873,54 @@ bool emitter::IsRedundantMov(
+ #endif // TARGET_64BIT
+     }
+ 
++#ifdef TARGET_AMD64
++    // LSRA may keep a MULX row multiplier in a home register and insert the
++    // same RDX copy at every lane. MULX and the carry arithmetic preserve RDX.
++    // Look back only through known integer instructions in a safe peephole
++    // region; any write to either register (including a partial write) ends it.
++    if ((ins == INS_mov) && (fmt == IF_RWR_RRD) && (size == EA_8BYTE) && (dst == REG_RDX) &&
++        genIsValidIntReg(src) && emitCanPeepholeLastIns())
++    {
++        bool sawMulx = false;
++        bool redundant = false;
++        emitPeepholeIterateLastInstrs([&](instrDesc* id) {
++            if ((id->idIns() == INS_mov) && (id->idInsFmt() == IF_RWR_RRD) &&
++                (id->idOpSize() == EA_8BYTE) && (id->idReg1() == dst) && (id->idReg2() == src))
++            {
++                redundant = sawMulx;
++                return PEEPHOLE_ABORT;
++            }
++            switch (id->idIns())
++            {
++                case INS_mulx:
++                    sawMulx = true;
++                    break;
++                case INS_mov:
++                case INS_add:
++                case INS_sub:
++                case INS_adc:
++                case INS_sbb:
++                case INS_adcx:
++                case INS_adox:
++                case INS_test:
++                    break;
++                default:
++                    return PEEPHOLE_ABORT;
++            }
++            if (emitIsInstrWritingToReg(id, dst) || emitIsInstrWritingToReg(id, src))
++            {
++                return PEEPHOLE_ABORT;
++            }
++            return PEEPHOLE_CONTINUE;
++        });
++        if (redundant)
++        {
++            JITDUMP("\n -- suppressing repeated MULX multiplier copy to RDX.\n");
++            return true;
++        }
++    }
++#endif // TARGET_AMD64
++
+     // TODO-XArch-CQ: Certain instructions, such as movaps vs movups, are equivalent in
+     // functionality even if their actual identifier differs and we should optimize these
+ 
 diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
-index 5ce80283..4227a271 100644
+index 5ce80283..7f8ef324 100644
 --- a/src/coreclr/jit/lower.cpp
 +++ b/src/coreclr/jit/lower.cpp
 @@ -9817,6 +9817,7 @@ void Lowering::AfterLowerBlocks()
@@ -1053,7 +1112,7 @@ index 5ce80283..4227a271 100644
                      }
                  }
                  if (!fullAdder)
-@@ -15311,6 +16284,66 @@ bool Lowering::LowerFullAdders()
+@@ -15311,6 +16284,69 @@ bool Lowering::LowerFullAdders()
      return changed;
  }
  
@@ -1098,6 +1157,9 @@ index 5ce80283..4227a271 100644
 +    {
 +        case GT_LEA:
 +            return true;
++        case GT_NOT:
++            // Integer NOT preserves CF and OF, unlike NEG and XOR.
++            return node->TypeIs(TYP_INT, TYP_LONG);
 +        case GT_IND:
 +            return node->TypeIs(TYP_INT, TYP_LONG, TYP_BYREF) && ((node->gtFlags & GTF_IND_VOLATILE) == 0);
 +        case GT_STOREIND:
@@ -1120,7 +1182,7 @@ index 5ce80283..4227a271 100644
  //------------------------------------------------------------------------
  // LowerCarryChains: Fold final-limb consumers, then remove single-use carry
  // materialization and restoration between arithmetic stages in one block.
-@@ -15350,10 +16383,7 @@ void Lowering::LowerCarryChains()
+@@ -15350,10 +16386,7 @@ void Lowering::LowerCarryChains()
              // Folding the final limb can insert its operand reads between a
              // stage's restore and arithmetic. These register copies do not
              // change the restored flags.
@@ -1132,7 +1194,7 @@ index 5ce80283..4227a271 100644
              {
                  restore = restore->gtPrev;
                  restoreBudget--;
-@@ -15430,23 +16460,44 @@ void Lowering::LowerCarryChains()
+@@ -15430,23 +16463,44 @@ void Lowering::LowerCarryChains()
                  continue;
              }
  
@@ -1189,7 +1251,7 @@ index 5ce80283..4227a271 100644
              }
              if (crossing != restore)
              {
-@@ -15455,10 +16506,26 @@ void Lowering::LowerCarryChains()
+@@ -15455,10 +16509,26 @@ void Lowering::LowerCarryChains()
  
              // The definition may be removed only if this is its sole read up
              // to the next definition, and it cannot escape through a live-out.
@@ -1220,7 +1282,7 @@ index 5ce80283..4227a271 100644
                  if (use->OperIsLocal() && use->AsLclVarCommon()->GetLclNum() == local)
                  {
                      if (use->OperIs(GT_STORE_LCL_VAR))
-@@ -15471,7 +16538,7 @@ void Lowering::LowerCarryChains()
+@@ -15471,7 +16541,7 @@ void Lowering::LowerCarryChains()
                      }
                  }
              }
@@ -1229,13 +1291,13 @@ index 5ce80283..4227a271 100644
              {
                  continue;
              }
-@@ -15856,9 +16923,11 @@ bool Lowering::IsCarryOperandAvailable(GenTree* operand, GenTree* producer, GenT
+@@ -15856,9 +16926,11 @@ bool Lowering::IsCarryOperandAvailable(GenTree* operand, GenTree* producer, GenT
          }
      }
  
 -    if (operand->OperIs(GT_IND))
 +    if (operand->OperIs(GT_IND) ||
-+        (operand->OperIs(GT_AND, GT_OR, GT_XOR) && operand->TypeIs(TYP_INT, TYP_LONG) &&
++        (operand->OperIs(GT_AND, GT_OR, GT_XOR, GT_NOT) && operand->TypeIs(TYP_INT, TYP_LONG) &&
 +         !operand->gtSetFlags() && !operand->OperConsumesFlags()))
      {
 -        // Move the load together with its address calculation. A closed range
@@ -1243,7 +1305,7 @@ index 5ce80283..4227a271 100644
          // ensures that no intermediate value has a use left behind. Check all
          // crossed nodes for aliasing, exception ordering, and local definitions.
          bool               isClosed;
-@@ -16081,11 +17150,54 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+@@ -16081,11 +17153,54 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
          }
  #endif
          GenTree* operands[] = {(combine || negate) ? other->gtGetOp1() : other, combine ? other->gtGetOp2() : nullptr};
@@ -1302,7 +1364,7 @@ index 5ce80283..4227a271 100644
          }
  
          // Inserting ADC/SBB changes flags. No later consumer may observe the
-@@ -16112,14 +17224,14 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+@@ -16112,14 +17227,14 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
          if (!combine)
          {
              operands[1] = m_compiler->gtNewZeroConNode(add->TypeGet());
@@ -1319,7 +1381,7 @@ index 5ce80283..4227a271 100644
              }
              operands[i]->ClearContained();
              operands[i]->ClearRegOptional();
-@@ -16138,8 +17250,11 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+@@ -16138,8 +17253,11 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
          add->ChangeOper(add->OperIs(GT_SUB) ? GT_SUB_BORROW : (borrow ? GT_ADD_BORROW : GT_ADD_CARRY));
          add->gtOp1 = operands[0];
          add->gtOp2 = operands[1];
@@ -1384,6 +1446,177 @@ index f50b30f9..4cd427cd 100644
                      buildUses = false;
                      break;
                  }
+diff --git a/src/tests/JIT/opt/Add/ComplementedCarry.cs b/src/tests/JIT/opt/Add/ComplementedCarry.cs
+new file mode 100644
+index 00000000..ec4a8077
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/ComplementedCarry.cs
+@@ -0,0 +1,147 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using System.Runtime.InteropServices;
++using Xunit;
++
++// Integer NOT preserves carry flags. Its operand may move only when the
++// closed load/expression tree is invariant; aliasing stores and a dependency
++// on the previous sum must keep it at its original position.
++public class ComplementedCarryTests
++{
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Add(ulong a, ulong b, ref ulong carry)
++    {
++        ulong s = a + b;
++        ulong c0 = s < a ? 1UL : 0UL;
++        ulong r = s + carry;
++        ulong c1 = r < s ? 1UL : 0UL;
++        carry = c0 + c1;
++        return r;
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static uint Add(uint a, uint b, ref uint carry)
++    {
++        uint s = a + b;
++        uint c0 = s < a ? 1U : 0U;
++        uint r = s + carry;
++        uint c1 = r < s ? 1U : 0U;
++        carry = c0 + c1;
++        return r;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong Words(ulong[] a, ulong[] b, ulong[] result, bool dependent)
++    {
++        ulong x0 = a[0], x1 = a[1], x2 = a[2];
++        ulong y0 = b[0], y1 = b[1], y2 = b[2];
++        ulong seed = x0 + 1;
++        ulong r0 = seed + ~y0;
++        ulong carry = r0 < seed ? 1UL : 0UL;
++        // The second variant depends on the just-produced results, so neither
++        // complement may be hoisted ahead of the flags producer that defines it.
++        ulong r1 = Add(x1, ~(dependent ? r0 : y1), ref carry);
++        ulong r2 = Add(x2, ~(dependent ? r1 : y2), ref carry);
++        result[0] = r0; result[1] = r1; result[2] = r2;
++        return carry;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint Words32(uint b0, uint b1, uint b2, out uint r0, out uint r1, out uint r2)
++    {
++        const uint x0 = 0xfeffeffe, x1 = 0x80000001, x2 = 0x7fffffff;
++        r0 = (x0 + 1) + ~b0;
++        uint carry = r0 < (x0 + 1) ? 1U : 0U;
++        r1 = Add(x1, ~b1, ref carry);
++        r2 = Add(x2, ~b2, ref carry);
++        return carry;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong Aliased(ulong[] a, ReadOnlySpan<ulong> right, Span<ulong> output)
++    {
++        ulong x0 = a[0], x1 = a[1], x2 = a[2];
++        ref ulong b = ref MemoryMarshal.GetReference(right);
++        ref ulong r = ref MemoryMarshal.GetReference(output);
++        ulong seed = x0 + 1;
++        ulong r0 = seed + ~b;
++        ulong carry = r0 < seed ? 1UL : 0UL;
++        r = r0;
++        ulong r1 = Add(x1, ~Unsafe.Add(ref b, 1), ref carry);
++        Unsafe.Add(ref r, 1) = r1;
++        ulong r2 = Add(x2, ~Unsafe.Add(ref b, 2), ref carry);
++        Unsafe.Add(ref r, 2) = r2;
++        return carry;
++    }
++
++    [Fact]
++    public static void TestEntryPoint()
++    {
++        var random = new Random(134041);
++        ulong Next() => random.Next(5) switch
++        {
++            0 => 0, 1 => ulong.MaxValue, 2 => 0x8000000000000000UL,
++            _ => (ulong)random.NextInt64() * 3 + (ulong)random.Next()
++        };
++        BigInteger radix = BigInteger.One << 64;
++        BigInteger mask = radix - 1;
++        BigInteger radix32 = BigInteger.One << 32;
++        BigInteger mask32 = radix32 - 1;
++        for (int i = 0; i < 5000; i++)
++        {
++            // Absorbing the initial carry into x0+1 must not overflow.
++            ulong[] a = { Next() >> 1, Next(), Next() };
++            ulong[] b = { Next(), Next(), Next() };
++            ulong[] r = new ulong[3];
++            foreach (bool dependent in new[] { false, true })
++            {
++                ulong actualCarry = Words(a, b, r, dependent);
++                ulong expectedCarry = 1;
++                ulong[] expected = new ulong[3];
++                for (int j = 0; j < 3; j++)
++                {
++                    ulong operand = dependent && j != 0 ? expected[j - 1] : b[j];
++                    BigInteger sum = (BigInteger)a[j] + (mask - operand) + expectedCarry;
++                    expected[j] = (ulong)(sum & mask);
++                    expectedCarry = (ulong)(sum >> 64);
++                    if (r[j] != expected[j]) throw new Exception("Complemented carry limb mismatch");
++                }
++                if (actualCarry != expectedCarry) throw new Exception("Complemented carry mismatch");
++            }
++
++            uint b0 = (uint)Next(), b1 = (uint)Next(), b2 = (uint)Next();
++            uint carry32 = Words32(b0, b1, b2, out uint r0, out uint r1, out uint r2);
++            uint[] x32 = { 0xfeffeffe, 0x80000001, 0x7fffffff };
++            uint[] y32 = { b0, b1, b2 }, z32 = { r0, r1, r2 };
++            uint expected32 = 1;
++            for (int j = 0; j < 3; j++)
++            {
++                BigInteger sum = (BigInteger)x32[j] + (mask32 - y32[j]) + expected32;
++                if (z32[j] != (uint)(sum & mask32)) throw new Exception("32-bit complement mismatch");
++                expected32 = (uint)(sum >> 32);
++            }
++            if (carry32 != expected32) throw new Exception("32-bit complement carry mismatch");
++
++            foreach (int offset in new[] { 0, 1 })
++            {
++                ulong[] buffer = { b[0], b[1], b[2], Next() };
++                ulong[] expected = (ulong[])buffer.Clone();
++                ulong expectedCarry = 1;
++                for (int j = 0; j < 3; j++)
++                {
++                    BigInteger sum = (BigInteger)a[j] + (mask - expected[j]) + expectedCarry;
++                    expected[offset + j] = (ulong)(sum & mask);
++                    expectedCarry = (ulong)(sum >> 64);
++                }
++                ulong actualCarry = Aliased(a, buffer.AsSpan(0, 3), buffer.AsSpan(offset, 3));
++                if (actualCarry != expectedCarry) throw new Exception("Aliased complement carry mismatch");
++                for (int j = 0; j < 4; j++)
++                    if (buffer[j] != expected[j]) throw new Exception("Aliased complement load moved across store");
++            }
++        }
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/ComplementedCarry.csproj b/src/tests/JIT/opt/Add/ComplementedCarry.csproj
+new file mode 100644
+index 00000000..baea60f6
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/ComplementedCarry.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="ComplementedCarry.cs" />
++    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
++    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
++  </ItemGroup>
++</Project>
 diff --git a/src/tests/JIT/opt/Add/MaskSelect.cs b/src/tests/JIT/opt/Add/MaskSelect.cs
 new file mode 100644
 index 00000000..49651e64
@@ -1740,6 +1973,131 @@ index 00000000..5179eda9
 +  </PropertyGroup>
 +  <ItemGroup>
 +    <Compile Include="MontgomeryRows.cs" />
++    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
++    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
++  </ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/MulxMultiplierCopies.cs b/src/tests/JIT/opt/Add/MulxMultiplierCopies.cs
+new file mode 100644
+index 00000000..da96b756
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/MulxMultiplierCopies.cs
+@@ -0,0 +1,101 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++// Repeated copies of a carry-row multiplier to RDX may be elided only while
++// both registers retain the same value. Cover a 32-bit update, a call, and a
++// new row under pressure; the emitter must stop at each of these boundaries.
++public class MulxMultiplierCopyTests
++{
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong MulAdd(ulong m, ulong x, ulong t, ulong c, out ulong lo)
++    {
++        ulong hi = Math.BigMul(m, x, out ulong low);
++        low += t;
++        hi += low < t ? 1UL : 0UL;
++        low += c;
++        hi += low < c ? 1UL : 0UL;
++        lo = low;
++        return hi;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong AcrossCall(ulong m) => (m << 17) | (m >> 47);
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong Rows(ulong seed, ulong delta, ulong[] a, ulong[] t)
++    {
++        ulong x0 = a[0], x1 = a[1], x2 = a[2], x3 = a[3], x4 = a[4], x5 = a[5];
++        ulong t0 = t[0], t1 = t[1], t2 = t[2], t3 = t[3], t4 = t[4], t5 = t[5];
++        ulong q = seed * 0x89f3fffcfffcfffdUL;
++        ulong mix = 0;
++        ulong carry;
++        carry = MulAdd(q, x0, t0, 0, out t0);
++        carry = MulAdd(q, x1, t1, carry, out t1);
++        carry = MulAdd(q, x2, t2, carry, out t2);
++        carry = MulAdd(q, x3, t3, carry, out t3);
++        carry = MulAdd(q, x4, t4, carry, out t4);
++        carry = MulAdd(q, x5, t5, carry, out t5);
++        mix ^= carry;
++        q = (uint)(q + delta); // partial-width definition invalidates a previous copy
++        carry = MulAdd(q, x0, t0, 0, out t0);
++        carry = MulAdd(q, x1, t1, carry, out t1);
++        carry = MulAdd(q, x2, t2, carry, out t2);
++        carry = MulAdd(q, x3, t3, carry, out t3);
++        carry = MulAdd(q, x4, t4, carry, out t4);
++        carry = MulAdd(q, x5, t5, carry, out t5);
++        mix ^= carry;
++        q = AcrossCall(q ^ seed); // a call invalidates register-value knowledge
++        carry = MulAdd(q, x0, t0, 0, out t0);
++        carry = MulAdd(q, x1, t1, carry, out t1);
++        carry = MulAdd(q, x2, t2, carry, out t2);
++        carry = MulAdd(q, x3, t3, carry, out t3);
++        carry = MulAdd(q, x4, t4, carry, out t4);
++        carry = MulAdd(q, x5, t5, carry, out t5);
++        mix ^= carry;
++        t[0] = t0; t[1] = t1; t[2] = t2; t[3] = t3; t[4] = t4; t[5] = t5;
++        return mix ^ q;
++    }
++
++    [Fact]
++    public static void TestEntryPoint()
++    {
++        var random = new Random(134040);
++        ulong Next() => random.Next(5) switch
++        {
++            0 => 0, 1 => ulong.MaxValue, 2 => 0xffffffffUL,
++            _ => (ulong)random.NextInt64() * 3 + (ulong)random.Next()
++        };
++        BigInteger radix = BigInteger.One << 64;
++        BigInteger modulus = BigInteger.One << 384;
++        for (int i = 0; i < 5000; i++)
++        {
++            ulong seed = Next(), delta = Next();
++            ulong[] a = { Next(), Next(), Next(), Next(), Next(), Next() };
++            ulong[] t = { Next(), Next(), Next(), Next(), Next(), Next() };
++            BigInteger x = 0, acc = 0;
++            for (int j = 5; j >= 0; j--) { x = x * radix + a[j]; acc = acc * radix + t[j]; }
++            ulong q = unchecked(seed * 0x89f3fffcfffcfffdUL);
++            ulong mix = 0;
++            for (int row = 0; row < 3; row++)
++            {
++                if (row == 1) q = unchecked((uint)(q + delta));
++                if (row == 2) q = AcrossCall(q ^ seed);
++                acc += x * q;
++                mix ^= (ulong)(acc / modulus);
++                acc %= modulus;
++            }
++            ulong actual = Rows(seed, delta, a, t);
++            if (actual != (mix ^ q)) throw new Exception("Multiplier copy carry mismatch");
++            for (int j = 0; j < 6; j++)
++            {
++                if (t[j] != (ulong)(acc % radix)) throw new Exception("Multiplier copy limb mismatch");
++                acc /= radix;
++            }
++        }
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/MulxMultiplierCopies.csproj b/src/tests/JIT/opt/Add/MulxMultiplierCopies.csproj
+new file mode 100644
+index 00000000..7d9262de
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/MulxMultiplierCopies.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="MulxMultiplierCopies.cs" />
 +    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
 +    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
 +  </ItemGroup>

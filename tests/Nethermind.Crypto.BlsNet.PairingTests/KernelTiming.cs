@@ -15,7 +15,7 @@ internal static unsafe partial class Program
         Fp2 a = Field2(), b = Field2();
         string[] names = ["Fp multiply", "Fp square", "Fp2 multiply", "Fp2 square", "Fp inverse",
             "MultiplyWide", "ReduceWide", "ReduceWideSmall", "AddWide", "SubtractWide", "AddUnreduced", "Halve", "Negate", "SubtractSumComposite",
-            "Fp add", "Fp subtract", "MultiplyComposite", "ReduceWidePositive"];
+            "Fp add", "Fp subtract", "MultiplyComposite", "ReduceWidePositive", "ReduceWideDifference"];
         Fp.MultiplyWide(out FpWide x, a.C0, b.C0);
         Fp.MultiplyWide(out FpWide y, a.C1, b.C1);
         Console.WriteLine("Operation | managed ns | blst ns | managed bytes");
@@ -91,6 +91,7 @@ internal static unsafe partial class Program
                 case 15: for (int i = 0; i < count; i++) Fp.Subtract(out r, a.C0, b.C0); break;
                 case 16: for (int i = 0; i < count; i++) Fp.MultiplyComposite(out r, a.C0, b.C0); break;
                 case 17: RunPositiveKernel(count, x, out r); break;
+                case 18: RunDifferenceKernel(count, x, y, out r); break;
             }
         }
         _fpSink = r; _fp2Sink = r2; _wideSink = wide;
@@ -117,6 +118,13 @@ internal static unsafe partial class Program
     {
         r = default;
         for (int i = 0; i < count; i++) Fp.ReduceWidePositive(out r, x);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void RunDifferenceKernel(int count, in FpWide x, in FpWide y, out Fp r)
+    {
+        r = default;
+        for (int i = 0; i < count; i++) Fp.ReduceWideDifference(out r, x, y);
     }
 
     private static class KernelNative

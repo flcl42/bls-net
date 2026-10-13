@@ -20,9 +20,15 @@ internal static unsafe partial class Program
 
     private static void Main(string[] args)
     {
+        // Set the switch before any field method initializes the kernel policy.
+        if (args.Contains("--expanded-kernels")) AppContext.SetSwitch("Nethermind.Crypto.BlsNet.UseExpandedKernels", true);
+        if (args.Contains("--compact-kernels")) AppContext.SetSwitch("Nethermind.Crypto.BlsNet.UseExpandedKernels", false);
         NativeAvailable = NativeBlstLoader.TryLoad(out nint handle);
         if (NativeAvailable) NativeLibrary.SetDllImportResolver(Assembly.GetExecutingAssembly(), (name, _, _) => name == "blst" ? handle : 0);
         Console.WriteLine(RuntimeInformation.FrameworkDescription);
+        if (args.Contains("--kernel-cold-start")) { ColdKernelStart(); return; }
+        Console.WriteLine($"Field kernels: {(Fp.UseExpandedKernels ? "expanded" : "compact")}");
+        if (args.Contains("--kernel-policy")) { KernelPolicyDiagnostics(); return; }
         if (args.Contains("--kernel-timing")) { KernelTimings(); return; }
         if (args.Contains("--kernel-tests")) { KernelTests(); Console.WriteLine($"Passed {_checks:N0} kernel checks."); return; }
         if (args.Contains("--timing") || args.Contains("--perf")) { Timings(args.Contains("--perf")); return; }
@@ -33,6 +39,50 @@ internal static unsafe partial class Program
         if (NativeAvailable) TowerTests();
         PairingTests();
         Console.WriteLine($"Passed {_checks:N0} checks.");
+    }
+
+    // An ordinary tiered caller, for checking readonly-field folding in Tier1.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool ReadKernelPolicy() => Fp.UseExpandedKernels;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void MultiplyWithPolicy(out Fp2 result, in Fp2 left, in Fp2 right) => Fp2.Multiply(out result, left, right);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ColdKernelStart()
+    {
+        // Load raw Montgomery words without calling any Fp method or reading a
+        // field static first. The dispatcher must initialize policy before the
+        // chosen AggressiveOptimization kernel is compiled, even on this path.
+        Span<byte> bytes = stackalloc byte[96];
+        bytes.Clear();
+        Span<ulong> words = MemoryMarshal.Cast<byte, ulong>(bytes);
+        words[0] = 1; words[6] = 2;
+        Fp2 a = MemoryMarshal.Read<Fp2>(bytes);
+        Fp2.Multiply(out Fp2 product, a, a);
+        RInverse = BigInteger.ModPow(R % P, P - 2, P);
+        CheckReduced(product.C0, -3 * RInverse, "cold multiply real");
+        CheckReduced(product.C1, 4 * RInverse, "cold multiply imaginary");
+        Fp2.Square(out Fp2 square, a);
+        Check(Fp2.AreEqual(square, product), "cold square");
+        Console.WriteLine($"Field kernels: {(Fp.UseExpandedKernels ? "expanded" : "compact")}");
+        Console.WriteLine($"Passed {_checks:N0} cold-start checks.");
+    }
+
+    private static void KernelPolicyDiagnostics()
+    {
+        bool expected = Fp.UseExpandedKernels;
+        Fp2 zero = default;
+        for (int round = 0; round < 4; round++)
+        {
+            for (int i = 0; i < 10000; i++)
+            {
+                MultiplyWithPolicy(out Fp2 product, zero, zero);
+                Check(ReadKernelPolicy() == expected && Fp2.AreEqual(product, zero), "stable kernel policy");
+            }
+            Thread.Sleep(50); // Allow background Tier1 compilation before the next calls.
+        }
+        Console.WriteLine($"Passed {_checks:N0} policy checks.");
     }
 
     private static void Check(bool ok, string label)

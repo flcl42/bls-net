@@ -1,5 +1,7 @@
 # Field-kernel follow-up
 
+This is the round 1 capture at `5369bab`. The [round 2 report](field-kernel-round2-report.md) supersedes its framework-based selection and records the subsequent kernels, JIT changes and validation.
+
 The follow-up eliminates carry materialization from the captured hot field kernels and reduces net11.0 Fp2 multiplication from three Montgomery multiplications to three raw products and two reductions. Patched Fp2 multiply improves about 15%, and stock .NET 11 about 18%. The goal of beating blst on every multiply/square is **not fully reached**: this capture puts patched Fp multiply near parity, Fp square about 3% above the dedicated native square, Fp2 multiply about 6% above native, and Fp2 square about 10% above native.
 
 ## Kernel timings

@@ -55,6 +55,7 @@ internal static unsafe partial class Program
             {
                 Fp.ReduceWideSmall(out reduced, x);
                 CheckReduced(reduced, edge * RInverse, "small reducer signed bound edge");
+                TestWideDifference(x, default, edge);
                 if (edge.Sign >= 0)
                 {
                     Fp.ReduceWidePositive(out reduced, x);
@@ -110,12 +111,26 @@ internal static unsafe partial class Program
             if ((i & 1) != 0) middle = -middle;
             FpWide medium = Wide(middle); Fp.ReduceWideSmall(out actual, medium);
             CheckReduced(actual, middle * RInverse, "small reduction vs BigInteger");
+            TestWideDifference(medium, wx, middle - x, checkBound: true);
             medium = Wide(BigInteger.Abs(middle));
             Fp.ReduceWidePositive(out actual, medium);
             CheckReduced(actual, BigInteger.Abs(middle) * RInverse, "positive reduction vs BigInteger");
             TestFp2(Field2(), Field2());
         }
         Console.WriteLine("Kernels: 10,000 random signed wide/small reductions, raw products, unreduced sums, fused subtraction and Fp2 cases passed.");
+    }
+
+    private static void TestWideDifference(in FpWide a, in FpWide b, BigInteger difference, bool checkBound = false)
+    {
+        if (checkBound && BigInteger.Abs(difference) >= P * R) return;
+        Fp.ReduceWideDifference(out Fp actual, a, b);
+        CheckReduced(actual, difference * RInverse, "wide difference reduction vs BigInteger");
+        FpWide alias = a;
+        Fp.ReduceWideDifference(out Unsafe.As<FpWide, Fp>(ref alias), alias, b);
+        Check(Fp.AreEqual(Unsafe.As<FpWide, Fp>(ref alias), actual), "wide difference left overlap");
+        alias = b;
+        Fp.ReduceWideDifference(out Unsafe.As<FpWide, Fp>(ref alias), a, alias);
+        Check(Fp.AreEqual(Unsafe.As<FpWide, Fp>(ref alias), actual), "wide difference right overlap");
     }
     private static void TestKernelPair(in Fp a, in Fp b, BigInteger x, BigInteger y)
     {
@@ -127,7 +142,6 @@ internal static unsafe partial class Program
         Unsafe.As<FpWide, Fp>(ref overlap) = b;
         Fp.MultiplyWide(out overlap, a, Unsafe.As<FpWide, Fp>(ref overlap));
         Check(Signed(overlap) == x * y, "wide product right overlap");
-#if !NET10_0
         Fp.MultiplyWide(out FpWide t1, b, b);
         Fp.MultiplyWide(out FpWide t2, a, a);
         FpWide t0 = wide;
@@ -135,7 +149,12 @@ internal static unsafe partial class Program
         Check(Signed(t0) == x * y - y * y, "wide Karatsuba real in place");
         Check(Signed(t2) == x * x - x * y - y * y, "wide Karatsuba imaginary in place");
         Check(Signed(t1) == y * y, "wide Karatsuba middle intact");
-#endif
+        t0 = wide;
+        Fp.MultiplyWide(out t2, a, a);
+        Fp.SubtractWideImaginary(ref t2, t0, t1);
+        Check(Signed(t2) == x * x - x * y - y * y, "wide imaginary in place");
+        Check(Signed(t0) == x * y && Signed(t1) == y * y, "wide imaginary inputs intact");
+        TestWideDifference(t0, t1, x * y - y * y);
         Fp.ReduceWide(out Fp result, wide);
         CheckReduced(result, x * y * RInverse, "wide reducer vs BigInteger");
         if (NativeAvailable) { Native.blst_fp_mul(out Fp native, a, b); Check(Fp.AreEqual(result, native), "wide product and reducer vs native"); }
@@ -148,6 +167,9 @@ internal static unsafe partial class Program
         alias = a; Fp.Square(out alias, alias); Check(Fp.AreEqual(alias, square), "Fp square alias");
         Fp.Halve(out Fp half, a); CheckReduced(half, (x + (x.IsEven ? 0 : P)) / 2, "Fp halve raw BigInteger");
         alias = a; Fp.Halve(out alias, alias); Check(Fp.AreEqual(alias, half), "Fp halve alias");
+        Fp.Negate(out Fp negative, a); CheckReduced(negative, -x, "Fp negate raw BigInteger");
+        if (NativeAvailable) { KernelNative.blst_fp_cneg(out Fp native, a, 1); Check(Fp.AreEqual(negative, native), "Fp negate native"); }
+        alias = a; Fp.Negate(out alias, alias); Check(Fp.AreEqual(alias, negative), "Fp negate alias");
     }
     private static void TestFp2(in Fp2 a, in Fp2 b)
     {

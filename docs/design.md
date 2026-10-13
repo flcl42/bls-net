@@ -23,6 +23,8 @@ Fp occupies 48 bytes; Fr occupies 32 bytes. Extension fields and public points f
 
 Fp parsing accepts 48-byte canonical big-endian values and rejects values at or above p. Raw G1 coordinates are X followed by Y. Raw G2 coordinates are X.C0, X.C1, Y.C0, Y.C1. Affine infinity uses zero coordinates; projective infinity has Z = 0. EIP-2537's 64-byte padded field encoding and big-endian scalars need conversion by the caller.
 
+Negation expresses p-a as p+~a+1 modulo 2^384. The first word absorbs the initial one into the modulus limb and explicitly computes its carry; the remaining words use `AddCarry`. This avoids constant-left subtractions becoming NEG/ADD and per-word comparisons in inline callers. A nonzero-input mask still maps zero to zero. The patched JIT keeps CF across integer NOT and moves a complement's closed invariant operand tree using the same alias and exception-order checks as masked additions.
+
 ## Extension tower
 
 The tower uses the same basis as blst:
@@ -47,11 +49,17 @@ Fp2, Fp6 and Fp12 inversion reduce through tower norms to base-field inversion. 
 
 `FpWide` is a signed 768-bit value with twelve 64-bit limbs. `Fp.MultiplyWide` produces a raw product; `AddWide` and `SubtractWide` combine raw values. These intermediates are internal arithmetic values, not canonical Fp residues.
 
-The net11.0 raw multiplier expands all six rows. Its reducers first reduce the low 384 bits, then add the signed high 384 bits: the cancellation multiplier depends only on the low half, so this is the same Montgomery quotient without a carry bit passing between rows. The net10.0 build retains the compact row loops because its stock JIT spills the expanded formula.
+Kernel selection follows the **executing runtime**, independently of the library's target framework. `Fp.UseExpandedKernels` is a static readonly Boolean: it defaults to `Environment.Version.Major >= 11`. Stock .NET 10 selects compact kernels; .NET 11 and the patched .NET 12-dev host select expanded kernels, including when they execute a net10.0 build or sources linked into Nethermind's net10.0 project. Once the field type is initialized, optimized JIT code folds the Boolean and removes the unused dispatch branch. Small inlineable dispatchers read the policy before calling distinct compact/expanded kernels. This also handles a cold first call from raw Montgomery data: the chosen `AggressiveOptimization` kernel compiles after initialization and contains no policy branch. Tier1 callers inline the dispatcher and call only the chosen kernel; a cold Tier0 caller can retain the selection until it is promoted.
+
+For testing, set the AppContext switch `Nethermind.Crypto.BlsNet.UseExpandedKernels` before the first field use, or set `BLSNET_EXPANDED_KERNELS` to `0`/`1` or `false`/`true` before launching the process. An explicitly set AppContext switch takes precedence. Missing or unrecognized environment values use the runtime default. Selection is fixed for the process after initialization; these settings do not change arithmetic results or instruction-set support. Expanded kernels are deliberately slower on stock .NET 10 and remain available there for differential tests.
+
+The expanded raw multiplier expands all six rows. Its reducers first reduce the low 384 bits, then add the signed high 384 bits: the cancellation multiplier depends only on the low half, so this is the same Montgomery quotient without a carry bit passing between rows. Compact mode retains the row loops because stock .NET 10 spills the expanded multiplier.
 
 Let R = 2^384. `ReduceWide` requires |value| < 3pR. Its Montgomery quotient lies in (-3p, 4p); it adds 4p when negative, then reduces by 2p and p. `ReduceWideSmall` requires |value| < pR. Its quotient lies in (-p, 2p), so one sign correction and final reduction suffice. Both return canonical Montgomery values.
 
-`ReduceWidePositive` requires 0 ≤ value < pR and omits the sign correction in the net11.0 build. Fp2 multiplication uses three raw products and two reductions there: the real component has magnitude below p², and the imaginary component is in [0, 2p²), so the small signed and positive reducers apply respectively. Its unreduced input sums are below 2p. The three distinct product buffers are combined in place before either output coordinate is written, preserving public Fp2 input/output aliases. The net10.0 build retains three CIOS multiplications. Fp2 square retains two CIOS multiplications; expanded square variants did not improve the measured paths.
+`ReduceWidePositive` requires 0 ≤ value < pR and omits the sign correction in expanded mode. Expanded Fp2 multiplication uses three raw products and two reductions: the real component has magnitude below p², and the imaginary component is in [0, 2p²), so the small signed and positive reducers apply respectively. Its unreduced input sums are below 2p. `SubtractWideImaginary` subtracts the first two products from the third in place, leaving its two inputs intact. `ReduceWideDifference` combines the real subtraction and signed reduction with the difference kept inside the reducer, avoiding a twelve-word scratch write/read. It requires |a-b| < pR and permits output overlap with either input. All three products are computed before either output coordinate is written, preserving public Fp2 input/output aliases. Compact mode retains three CIOS multiplications.
+
+Fp2 square uses two CIOS multiplications. Expanded mode inlines the imaginary product and isolates the real product, saving one call while staying within the carry-analysis budget. Compact mode isolates both: stock .NET 10 spills the larger inline method. Fully wide and fully inline square formulas did not improve the measured paths.
 
 `WideTower.Multiply2` forms unreduced Fp2 products. For canonical inputs, the real component has magnitude below p² and the imaginary component lies in [0, 2p²). `Add2`, `Subtract2` and `NonResidue2` combine them. `Multiply6`, `MultiplyBy0Y06` and `MultiplyByXY06` produce wide Fp6 results; `Reduce6` or `Reduce6Small` finishes them.
 
@@ -61,9 +69,9 @@ Interval bounds are 8p² for Fp6 products, 9p² for sparse products and 22p² fo
 
 Small single-field entry points, including `Fp.Multiply`, remain inlineable for isolated operations. Inlining the same carry chains into a large point, tower or square-root method can exceed JIT optimization budgets and increase register pressure.
 
-`CurveField<T>` isolates field operations used by generic point kernels with `NoInlining | AggressiveOptimization` wrappers. Fp2 arithmetic already has isolated entry points. Larger arithmetic formulas use `Fp.MultiplyComposite` to keep the Fp kernel compact. `FpCurveRoots` applies this pattern to the fixed square-root chain. Small coordinate moves and scalar logic can remain inline. Calling policies must be measured on each target runtime; forcing the public multiply to be non-inlined did not improve both stock and patched runtimes.
+`CurveField<T>` isolates field operations used by generic point kernels with `NoInlining | AggressiveOptimization` wrappers. Fp2 multiplication and square have inlineable policy dispatchers and isolated implementation kernels; its other larger arithmetic operations also have isolated entry points. Larger arithmetic formulas use `Fp.MultiplyComposite` to keep the Fp kernel compact. `FpCurveRoots` applies this pattern to the fixed square-root chain. Small coordinate moves and scalar logic can remain inline. Calling policies must be measured on each target runtime; forcing the public multiply to be non-inlined did not improve both stock and patched runtimes.
 
-The Fp Montgomery row loop processes two rows per iteration. Three-row and fully expanded Montgomery variants increased spills and were discarded. The experimental JIT's full-adder analysis still has a 2,048-node budget; large inline kernels also need independent benchmark methods to avoid spending that budget on unrelated switch cases. Raw multiplication benefits from full expansion behind a compact call. [Performance](performance.md#kernel-and-jit-details) describes the carry idioms and runtime patch, and the [field-kernel report](field-kernel-report.md) records the follow-up experiments.
+The Fp Montgomery row loop processes two rows per iteration. Three-row and fully expanded Montgomery variants increased spills and were discarded. The experimental JIT's full-adder analysis still has a 2,048-node budget; large inline kernels also need independent benchmark methods to avoid spending that budget on unrelated switch cases. Raw multiplication benefits from full expansion behind a compact call. [Performance](performance.md#kernel-and-jit-details) describes the carry idioms and runtime patch, and the [round 2 field-kernel report](field-kernel-round2-report.md) records the follow-up experiments.
 
 ## Curve coordinates and subgroup checks
 
@@ -85,13 +93,13 @@ The n = 1 path calls scalar multiplication. For 2 ≤ n < 32, signed width-4 tab
 
 Large inputs group points by signed digit and reduce each bucket in balanced affine-addition rounds. One Montgomery batch inversion supplies all slopes in a round. Repeated points use doubling, inverse points cancel, and infinity is skipped. Batch-affine accumulation uses max(2, projective window width - 1).
 
-| Group and target assembly | Batch-affine threshold |
+| Group and runtime policy | Batch-affine threshold |
 |---|---:|
-| G1, net10.0 or net11.0 | n ≥ 512 |
-| G2, net11.0 | n ≥ 128 |
-| G2, net10.0 | Disabled; XYZZ remains faster in the measured runs |
+| G1, either mode | n ≥ 512 |
+| G2, expanded mode | n ≥ 128 |
+| G2, compact mode | Disabled; XYZZ remains faster on stock .NET 10 |
 
-The G2 choice is compiled for the target framework; it is not selected by inspecting the running JIT. A patched runtime executing the net11.0 assembly therefore uses the net11.0 threshold. Storage is bounded stack memory or pooled arrays. Warmed measurements allocate zero heap bytes; first pool use can allocate.
+The G2 threshold follows the same runtime policy and test overrides as the field kernels, including for a net10.0 assembly hosted by the patched runtime. Storage is bounded stack memory or pooled arrays. Warmed measurements allocate zero heap bytes; first pool use can allocate.
 
 ## Map-to-curve
 

@@ -88,11 +88,17 @@ public struct Fp2 : IEquatable<Fp2>, IField<Fp2>
     }
 
     /// <summary>Karatsuba: (a0 + a1 u)(b0 + b1 u) = a0 b0 - a1 b1 + ((a0 + a1)(b0 + b1) - a0 b0 - a1 b1) u.</summary>
-    [SkipLocalsInit]
-    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void Multiply(out Fp2 result, in Fp2 left, in Fp2 right)
     {
-#if NET10_0
+        if (Fp.UseExpandedKernels) MultiplyExpanded(out result, left, right);
+        else MultiplyCompact(out result, left, right);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void MultiplyCompact(out Fp2 result, in Fp2 left, in Fp2 right)
+    {
         // The stock .NET 10 JIT spills the wide formula; keep its compact CIOS calls.
         Fp.MultiplyComposite(out Fp t0, left.C0, right.C0);
         Fp.MultiplyComposite(out Fp t1, left.C1, right.C1);
@@ -101,30 +107,54 @@ public struct Fp2 : IEquatable<Fp2>, IField<Fp2>
         Fp.MultiplyComposite(out Fp t2, sa, sb);
         Fp.SubtractComposite(out result.C0, t0, t1);
         Fp.SubtractSumComposite(out result.C1, t2, t0, t1);
-#else
-        // Each raw product is below 4p^2. The final real and imaginary
-        // components have magnitude below p^2 and 2p^2, respectively, so
-        // |real| < pR and 0 <= imaginary < pR; use signed and positive reducers.
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void MultiplyExpanded(out Fp2 result, in Fp2 left, in Fp2 right)
+    {
+        // Products are below 4p^2. The final real magnitude is below p^2
+        // and imaginary lies in [0, 2p^2), so both fit their reducer's pR bound.
         Fp.AddUnreduced(out Fp sa, left.C0, left.C1);
         Fp.AddUnreduced(out Fp sb, right.C0, right.C1);
         Fp.MultiplyWide(out FpWide t0, left.C0, right.C0);
         Fp.MultiplyWide(out FpWide t1, left.C1, right.C1);
         Fp.MultiplyWide(out FpWide t2, sa, sb);
-        Fp.SubtractWideProducts(ref t0, t1, ref t2);
-        Fp.ReduceWideSmall(out result.C0, t0);
+        Fp.SubtractWideImaginary(ref t2, t0, t1);
+        Fp.ReduceWideDifference(out result.C0, t0, t1);
         Fp.ReduceWidePositive(out result.C1, t2);
-#endif
     }
 
     /// <summary>(a0 + a1 u)^2 = (a0 + a1)(a0 - a1) + 2 a0 a1 u.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void Square(out Fp2 result, in Fp2 value)
+    {
+        if (Fp.UseExpandedKernels) SquareExpanded(out result, value);
+        else SquareCompact(out result, value);
+    }
+
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
-    public static void Square(out Fp2 result, in Fp2 value)
+    private static void SquareCompact(out Fp2 result, in Fp2 value)
     {
         Fp.AddUnreduced(out Fp sum, value.C0, value.C1);
         Fp.SubtractComposite(out Fp difference, value.C0, value.C1);
         Fp.AddUnreduced(out Fp twice0, value.C0, value.C0);
         Fp.MultiplyComposite(out Fp c1, twice0, value.C1);
+        Fp.MultiplyComposite(out result.C0, sum, difference);
+        result.C1 = c1;
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void SquareExpanded(out Fp2 result, in Fp2 value)
+    {
+        Fp.AddUnreduced(out Fp sum, value.C0, value.C1);
+        Fp.SubtractComposite(out Fp difference, value.C0, value.C1);
+        Fp.AddUnreduced(out Fp twice0, value.C0, value.C0);
+        // Inline one CIOS kernel, saving a call within the carry-analysis budget.
+        // Stock .NET 10 spills this method; compact mode keeps both isolated calls.
+        Fp.Multiply(out Fp c1, twice0, value.C1);
         Fp.MultiplyComposite(out result.C0, sum, difference);
         result.C1 = c1;
     }
