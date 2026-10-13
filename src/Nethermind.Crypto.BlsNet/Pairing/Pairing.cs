@@ -30,27 +30,23 @@ public static class Pairing
         Fp2.Square(out C, B);
         Fp2.Add(out D, q.X, B);
         Fp2.Square(out D, D);
-        Fp2.Subtract(out D, D, A);
-        Fp2.Subtract(out D, D, C);
+        Fp2Fused.SubtractSum(out D, D, A, C);
         Fp2.Add(out D, D, D);
         Fp2.MulBy3(out E, A);
         Fp2.Square(out F, E);
         Fp2.Add(out line.C0, E, q.X);
-        Fp2.Subtract(out ret.X, F, D);
-        Fp2.Subtract(out ret.X, ret.X, D);
+        Fp2Fused.SubtractSum(out ret.X, F, D, D);
         Fp2.Add(out ret.Z, q.Y, q.Z);
         Fp2.Square(out ret.Z, ret.Z);
-        Fp2.Subtract(out ret.Z, ret.Z, B);
-        Fp2.Subtract(out ret.Z, ret.Z, ZZ);
+        Fp2Fused.SubtractSum(out ret.Z, ret.Z, B, ZZ);
         Fp2.MulBy8(out C, C);
-        Fp2.Subtract(out ret.Y, D, ret.X);
+        Fp2Fused.Subtract(out ret.Y, D, ret.X);
         Fp2.Multiply(out ret.Y, ret.Y, E);
-        Fp2.Subtract(out ret.Y, ret.Y, C);
+        Fp2Fused.Subtract(out ret.Y, ret.Y, C);
         Fp2.Square(out line.C0, line.C0);
-        Fp2.Subtract(out line.C0, line.C0, A);
-        Fp2.Subtract(out line.C0, line.C0, F);
+        Fp2Fused.SubtractSum(out line.C0, line.C0, A, F);
         Fp2.MulBy4(out B, B);
-        Fp2.Subtract(out line.C0, line.C0, B);
+        Fp2Fused.Subtract(out line.C0, line.C0, B);
         Fp2.Multiply(out line.C1, E, ZZ);
         Fp2.Multiply(out line.C2, ret.Z, ZZ);
         t = ret;
@@ -72,30 +68,31 @@ public static class Pairing
         Fp2.Multiply(out U2, q.X, Z1Z1);
         Fp2.Multiply(out S2, q.Y, r.Z);
         Fp2.Multiply(out S2, S2, Z1Z1);
-        Fp2.Subtract(out H, U2, r.X);
+        Fp2Fused.Subtract(out H, U2, r.X);
         Fp2.Square(out HH, H);
         Fp2.Add(out I, HH, HH);
         Fp2.Add(out I, I, I);
         Fp2.Multiply(out J, H, I);
-        Fp2.Subtract(out line.C1, S2, r.Y);
+        Fp2Fused.Subtract(out line.C1, S2, r.Y);
         Fp2.Add(out line.C1, line.C1, line.C1);
         Fp2.Multiply(out V, r.X, I);
         Fp2.Square(out ret.X, line.C1);
-        Fp2.Subtract(out ret.X, ret.X, J);
-        Fp2.Subtract(out ret.X, ret.X, V);
-        Fp2.Subtract(out ret.X, ret.X, V);
+        Fp2Fused.Subtract(out ret.X, ret.X, J);
+        Fp2Fused.Subtract(out ret.X, ret.X, V);
+        Fp2Fused.Subtract(out ret.X, ret.X, V);
         Fp2.Multiply(out J, J, r.Y);
-        Fp2.Subtract(out ret.Y, V, ret.X);
+        Fp2Fused.Subtract(out ret.Y, V, ret.X);
         Fp2.Multiply(out ret.Y, ret.Y, line.C1);
-        Fp2.Subtract(out ret.Y, ret.Y, J);
-        Fp2.Subtract(out ret.Y, ret.Y, J);
+        Fp2Fused.SubtractSum(out ret.Y, ret.Y, J, J);
         Fp2.Add(out ret.Z, r.Z, H);
         Fp2.Square(out ret.Z, ret.Z);
-        Fp2.Subtract(out ret.Z, ret.Z, Z1Z1);
-        Fp2.Subtract(out ret.Z, ret.Z, HH);
-        Fp2.Multiply(out I, line.C1, q.X);
-        Fp2.Multiply(out J, q.Y, ret.Z);
-        Fp2.Subtract(out I, I, J);
+        Fp2Fused.SubtractSum(out ret.Z, ret.Z, Z1Z1, HH);
+        if (Fp.UseExpandedKernels) Fp2Fused.MultiplyDifference(out I, line.C1, q.X, q.Y, ret.Z);
+        else
+        {
+            Fp2.Multiply(out I, line.C1, q.X); Fp2.Multiply(out J, q.Y, ret.Z);
+            Fp2.Subtract(out I, I, J);
+        }
         Fp2.Add(out line.C0, I, I);
         line.C2 = ret.Z;
         t = ret;
@@ -146,8 +143,15 @@ public static class Pairing
         f = acc;
     }
 
-    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void LoopBatch(out Fp12 f, Span<Jacobian> t, ReadOnlySpan<G2Affine> q, ReadOnlySpan<G1Affine> p, int count)
+    {
+        if (Fp.UseExpandedKernels && count >= 2) LoopBatchPaired(out f, t, q, p, count);
+        else LoopBatchSingle(out f, t, q, p, count);
+    }
+
+    [SkipLocalsInit]
+    private static void LoopBatchSingle(out Fp12 f, Span<Jacobian> t, ReadOnlySpan<G2Affine> q, ReadOnlySpan<G1Affine> p, int count)
     {
         LineDouble(out Fp6 line, ref t[0], t[0]);
         Evaluate(ref line, p[0]);
@@ -179,6 +183,55 @@ public static class Pairing
             }
         }
         Fp12.Conjugate(out f, acc);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void LoopBatchPaired(out Fp12 f, Span<Jacobian> t, ReadOnlySpan<G2Affine> q, ReadOnlySpan<G1Affine> p, int count)
+    {
+        t = t[..count];
+        LineDouble(out Fp6 line0, ref t[0], t[0]); Evaluate(ref line0, p[0]);
+        LineDouble(out Fp6 line1, ref t[1], t[1]); Evaluate(ref line1, p[1]);
+        SparseTower.LineProduct(out Fp12 acc, line0, line1);
+        DoubleLines(ref acc, t, p, 2);
+        ReadOnlySpan<int> runs = [2, 3, 9, 32, 16];
+        foreach (int run in runs)
+        {
+            int i = 0;
+            for (; i + 1 < count; i += 2)
+            {
+                LineAdd(out line0, ref t[i], t[i], q[i]); Evaluate(ref line0, p[i]);
+                LineAdd(out line1, ref t[i + 1], t[i + 1], q[i + 1]); Evaluate(ref line1, p[i + 1]);
+                SparseTower.MultiplyPair(out acc, acc, line0, line1);
+            }
+            if (i < count)
+            {
+                LineAdd(out line0, ref t[i], t[i], q[i]); Evaluate(ref line0, p[i]);
+                Fp12.MultiplyBySparse(out acc, acc, line0);
+            }
+            for (int k = 0; k < run; k++)
+            {
+                Fp12.Square(out acc, acc); DoubleLines(ref acc, t, p, 0);
+            }
+        }
+        Fp12.Conjugate(out f, acc);
+    }
+
+    [SkipLocalsInit]
+    private static void DoubleLines(ref Fp12 acc, Span<Jacobian> t, ReadOnlySpan<G1Affine> p, int start)
+    {
+        int i = start;
+        for (; i + 1 < t.Length; i += 2)
+        {
+            LineDouble(out Fp6 line0, ref t[i], t[i]); Evaluate(ref line0, p[i]);
+            LineDouble(out Fp6 line1, ref t[i + 1], t[i + 1]); Evaluate(ref line1, p[i + 1]);
+            SparseTower.MultiplyPair(out acc, acc, line0, line1);
+        }
+        if (i < t.Length)
+        {
+            LineDouble(out Fp6 line, ref t[i], t[i]); Evaluate(ref line, p[i]);
+            Fp12.MultiplyBySparse(out acc, acc, line);
+        }
     }
 
     [SkipLocalsInit]

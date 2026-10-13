@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
 namespace Nethermind.Crypto.BlsNet.Curves;
@@ -24,16 +25,34 @@ public struct Jacobian<T> where T : struct, IField<T>
     }
 
     /// <summary>Doubles using dbl-2009-l; variable-time.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void Double(out Jacobian<T> r, in Jacobian<T> p)
     {
+        if (Fp.UseExpandedKernels) DoubleExpanded(out r, p);
+        else DoubleCompact(out r, p);
+    }
+
+    private static void DoubleExpanded(out Jacobian<T> r, in Jacobian<T> p)
+    {
         CurveField<T>.Square(out T a, p.X); CurveField<T>.Square(out T b, p.Y); CurveField<T>.Square(out T c, b);
-        CurveField<T>.Add(out T d, p.X, b); CurveField<T>.Square(out d, d); CurveField<T>.Subtract(out d, d, a);
-        CurveField<T>.Subtract(out d, d, c); CurveField<T>.Double(out d, d); CurveField<T>.MulBy3(out T e, a);
+        CurveField<T>.Add(out T d, p.X, b); CurveField<T>.Square(out d, d); CurveField<T>.SubtractSum(out d, d, a, c);
+        CurveField<T>.Double(out d, d); CurveField<T>.MulBy3(out T e, a);
         // Consume Y and Z before assigning X; this order permits r to alias p.
         CurveField<T>.Multiply(out r.Z, p.Y, p.Z); CurveField<T>.Double(out r.Z, r.Z);
         CurveField<T>.Square(out r.X, e); CurveField<T>.Double(out T t, d); CurveField<T>.Subtract(out r.X, r.X, t);
         CurveField<T>.Subtract(out r.Y, d, r.X); CurveField<T>.Multiply(out r.Y, r.Y, e); CurveField<T>.MulBy8(out c, c);
         CurveField<T>.Subtract(out r.Y, r.Y, c);
+    }
+
+    private static void DoubleCompact(out Jacobian<T> r, in Jacobian<T> p)
+    {
+        CurveField<T>.Square(out T a, p.X); CurveField<T>.Square(out T b, p.Y); CurveField<T>.Square(out T c, b);
+        CurveField<T>.Add(out T d, p.X, b); CurveField<T>.Square(out d, d); CurveField<T>.Subtract(out d, d, a);
+        CurveField<T>.Subtract(out d, d, c); CurveField<T>.Double(out d, d); CurveField<T>.MulBy3(out T e, a);
+        CurveField<T>.Square(out T x, e); CurveField<T>.Double(out T t, d); CurveField<T>.Subtract(out x, x, t);
+        CurveField<T>.Subtract(out T y, d, x); CurveField<T>.Multiply(out y, y, e); CurveField<T>.MulBy8(out c, c);
+        CurveField<T>.Subtract(out y, y, c); CurveField<T>.Multiply(out T z, p.Y, p.Z); CurveField<T>.Double(out z, z);
+        r = new(x, y, z);
     }
 
     /// <summary>Adds arbitrary projective points, including doubling and infinity; variable-time.</summary>
@@ -63,12 +82,27 @@ public struct Jacobian<T> where T : struct, IField<T>
         CurveField<T>.Multiply(out T z, p.Z, h); FinishAdd(out r, p.X, p.Y, h, v, z);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void FinishAdd(out Jacobian<T> r, in T u, in T s, in T h, in T v, in T z)
+    {
+        if (Fp.UseExpandedKernels) FinishAddExpanded(out r, u, s, h, v, z);
+        else FinishAddCompact(out r, u, s, h, v, z);
+    }
+
+    private static void FinishAddExpanded(out Jacobian<T> r, in T u, in T s, in T h, in T v, in T z)
     {
         CurveField<T>.Square(out T hh, h); CurveField<T>.Multiply(out T hhh, hh, h); CurveField<T>.Multiply(out T t, u, hh);
         CurveField<T>.Square(out r.X, v); CurveField<T>.Subtract(out r.X, r.X, hhh); CurveField<T>.Double(out T t2, t); CurveField<T>.Subtract(out r.X, r.X, t2);
         CurveField<T>.Subtract(out T y, t, r.X); CurveField<T>.MultiplyDifference(out r.Y, y, v, hhh, s);
         r.Z = z;
+    }
+
+    private static void FinishAddCompact(out Jacobian<T> r, in T u, in T s, in T h, in T v, in T z)
+    {
+        CurveField<T>.Square(out T hh, h); CurveField<T>.Multiply(out T hhh, hh, h); CurveField<T>.Multiply(out T t, u, hh);
+        CurveField<T>.Square(out T x, v); CurveField<T>.Subtract(out x, x, hhh); CurveField<T>.Double(out T t2, t); CurveField<T>.Subtract(out x, x, t2);
+        CurveField<T>.Subtract(out T y, t, x); CurveField<T>.Multiply(out y, y, v); CurveField<T>.Multiply(out hhh, hhh, s);
+        CurveField<T>.Subtract(out y, y, hhh); r = new(x, y, z);
     }
 
     /// <summary>Negates a point.</summary>

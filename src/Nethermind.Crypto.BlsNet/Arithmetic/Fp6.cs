@@ -38,9 +38,9 @@ public struct Fp6 : IEquatable<Fp6>
     [SkipLocalsInit]
     public static void Subtract(out Fp6 result, in Fp6 a, in Fp6 b)
     {
-        Fp2.Subtract(out result.C0, a.C0, b.C0);
-        Fp2.Subtract(out result.C1, a.C1, b.C1);
-        Fp2.Subtract(out result.C2, a.C2, b.C2);
+        Fp2Fused.Subtract(out result.C0, a.C0, b.C0);
+        Fp2Fused.Subtract(out result.C1, a.C1, b.C1);
+        Fp2Fused.Subtract(out result.C2, a.C2, b.C2);
     }
 
     /// <summary>Negate in Fp6; inputs may alias the result.</summary>
@@ -78,10 +78,10 @@ public struct Fp6 : IEquatable<Fp6>
         Fp2.Add(out result.C2, a.C2, a.C1);
         Fp2.Add(out result.C2, result.C2, a.C0);
         Fp2.Square(out result.C2, result.C2);
-        Fp2.Subtract(out result.C2, result.C2, s0);
-        Fp2.Subtract(out result.C2, result.C2, s2);
-        Fp2.Subtract(out result.C2, result.C2, m01);
-        Fp2.Subtract(out result.C2, result.C2, m12);
+        Fp2Fused.Subtract(out result.C2, result.C2, s0);
+        Fp2Fused.Subtract(out result.C2, result.C2, s2);
+        Fp2Fused.Subtract(out result.C2, result.C2, m01);
+        Fp2Fused.Subtract(out result.C2, result.C2, m12);
         Fp2.MulByNonResidue(out result.C0, m12);
         Fp2.Add(out result.C0, result.C0, s0);
         Fp2.MulByNonResidue(out result.C1, s2);
@@ -100,14 +100,14 @@ public struct Fp6 : IEquatable<Fp6>
         Fp2.Square(out c0, a.C0);
         Fp2.Multiply(out t0, a.C1, a.C2);
         Fp2.MulByNonResidue(out t0, t0);
-        Fp2.Subtract(out c0, c0, t0);
+        Fp2Fused.Subtract(out c0, c0, t0);
         Fp2.Square(out c1, a.C2);
         Fp2.MulByNonResidue(out c1, c1);
         Fp2.Multiply(out t0, a.C0, a.C1);
-        Fp2.Subtract(out c1, c1, t0);
+        Fp2Fused.Subtract(out c1, c1, t0);
         Fp2.Square(out c2, a.C1);
         Fp2.Multiply(out t0, a.C0, a.C2);
-        Fp2.Subtract(out c2, c2, t0);
+        Fp2Fused.Subtract(out c2, c2, t0);
         Fp2.Multiply(out t0, c1, a.C2);
         Fp2.Multiply(out t1, c2, a.C1);
         Fp2.Add(out t0, t0, t1);
@@ -149,8 +149,8 @@ public struct Fp6 : IEquatable<Fp6>
         Fp2.Add(out t4, a.C0, a.C1);
         Fp2.Add(out t5, b.C0, b.C1);
         Fp2.Multiply(out result.C1, t4, t5);
-        Fp2.Subtract(out result.C1, result.C1, t0);
-        Fp2.Subtract(out result.C1, result.C1, t1);
+        Fp2Fused.Subtract(out result.C1, result.C1, t0);
+        Fp2Fused.Subtract(out result.C1, result.C1, t1);
         Fp2.Multiply(out result.C2, a.C2, b.C0);
         Fp2.Add(out result.C2, result.C2, t1);
         Fp2.Add(out result.C0, t3, t0);

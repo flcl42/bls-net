@@ -27,7 +27,7 @@ public static class FieldRoots
         { ExtensionConstants.MultiplyConjugatePair(out r, candidate, CurveConstants.frobenius_y.C0); return true; }
         Fp.Negate(out Fp nc1, t.C1);
         if (Fp2.AreEqual(new Fp2(nc1, t.C0), a))
-        { Fp2.Multiply(out r, candidate, new Fp2(CurveConstants.frobenius_y.C1, CurveConstants.frobenius_y.C1)); return true; }
+        { ExtensionConstants.MultiplyEqualPair(out r, candidate, CurveConstants.frobenius_y.C1); return true; }
         r = candidate; return false;
     }
 

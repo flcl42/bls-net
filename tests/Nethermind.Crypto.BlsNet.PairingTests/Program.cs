@@ -318,7 +318,9 @@ internal static unsafe partial class Program
     private static class Native
     {
         [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp_mul(out Fp r, in Fp a, in Fp b);
+        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp_sqr(out Fp r, in Fp a);
         [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp2_mul(out Fp2 r, in Fp2 a, in Fp2 b);
+        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp2_sub(out Fp2 r, in Fp2 a, in Fp2 b);
         [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp2_sqr(out Fp2 r, in Fp2 a);
         [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp_inverse(out Fp r, in Fp a);
         [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp12_mul(out Fp12 r, in Fp12 a, in Fp12 b);
@@ -347,7 +349,7 @@ internal static unsafe partial class Program
         for (int i = 0; i < 8; i++) Points(out ps[i], out qs[i]);
         Pair.MillerLoop(ps.AsSpan(0, 1), qs.AsSpan(0, 1), out Fp12 f);
         Pair.FinalExponentiation(f, out Fp12 cyclo);
-        string[] names = ["Fp inverse", "Fp inverse Fermat", "Fp12 multiply", "Fp12 square", "Cyclotomic square", "Miller 1", "Miller 8", "Final exponentiation", "Pairing check 1", "Pairing check 2", "Pairing check 8", "Fp6 multiply", "Fp6 square", "Fp12 sparse multiply"];
+        string[] names = ["Fp inverse", "Fp inverse Fermat", "Fp12 multiply", "Fp12 square", "Cyclotomic square", "Miller 1", "Miller 8", "Final exponentiation", "Pairing check 1", "Pairing check 2", "Pairing check 8", "Fp6 multiply", "Fp6 square", "Fp12 sparse multiply", "Fp12 two sparse multiplies"];
         Console.WriteLine("Operation | managed ns | native ns | managed bytes");
         string[]? filters = Environment.GetEnvironmentVariable("BLST_BENCH_FILTER")?.Split('|');
         for (int op = quick ? 2 : 0; op < names.Length; op++)
@@ -418,6 +420,7 @@ internal static unsafe partial class Program
                     case 11: for (int i = 0; i < iterations; i++) Native.blst_fp6_mul(out r.C0, a.C0, b.C0); break;
                     case 12: for (int i = 0; i < iterations; i++) Native.blst_fp6_sqr(out r.C0, a.C0); break;
                     case 13: for (int i = 0; i < iterations; i++) Native.blst_fp12_mul_by_xy00z0(out r, a, b.C0); break;
+                    case 14: for (int i = 0; i < iterations; i++) { Native.blst_fp12_mul_by_xy00z0(out r, a, b.C0); Native.blst_fp12_mul_by_xy00z0(out r, r, b.C1); } break;
                     default:
                         nuint count = op == 8 ? 1u : op == 9 ? 2u : 8u;
                         for (int i = 0; i < iterations; i++) { Native.blst_miller_loop_n(out r, qq, pp, count); Native.blst_final_exp(out r, r); _boolSink = r.IsOne; }
@@ -439,6 +442,7 @@ internal static unsafe partial class Program
                     case 11: for (int i = 0; i < iterations; i++) Fp6.Multiply(out r.C0, a.C0, b.C0); break;
                     case 12: for (int i = 0; i < iterations; i++) Fp6.Square(out r.C0, a.C0); break;
                     case 13: for (int i = 0; i < iterations; i++) Fp12.MultiplyBySparse(out r, a, b.C0); break;
+                    case 14: for (int i = 0; i < iterations; i++) SparseTower.MultiplyPair(out r, a, b.C0, b.C1); break;
                     default:
                         int count = op == 8 ? 1 : op == 9 ? 2 : 8;
                         for (int i = 0; i < iterations; i++) _boolSink = Pair.PairingCheck(ps.AsSpan(0, count), qs.AsSpan(0, count));

@@ -11,7 +11,14 @@ internal static class CurveField<T> where T : struct, IField<T>
     { if (typeof(T) == typeof(Fp2)) T.Add(out r, a, b); else AddIsolated(out r, a, b); }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Subtract(out T r, in T a, in T b)
-    { if (typeof(T) == typeof(Fp2)) T.Subtract(out r, a, b); else SubtractIsolated(out r, a, b); }
+    {
+        if (typeof(T) == typeof(Fp2))
+        {
+            Unsafe.SkipInit(out r);
+            Fp2Fused.Subtract(out Unsafe.As<T, Fp2>(ref r), Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in a)), Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in b)));
+        }
+        else SubtractIsolated(out r, a, b);
+    }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Negate(out T r, in T a)
     { if (typeof(T) == typeof(Fp2)) T.Negate(out r, a); else NegateIsolated(out r, a); }
@@ -32,7 +39,15 @@ internal static class CurveField<T> where T : struct, IField<T>
     { if (typeof(T) == typeof(Fp2)) T.Multiply(out r, a, b); else MultiplyIsolated(out r, a, b); }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Square(out T r, in T a)
-    { if (typeof(T) == typeof(Fp2)) T.Square(out r, a); else SquareIsolated(out r, a); }
+    {
+        if (typeof(T) == typeof(Fp2)) T.Square(out r, a);
+        else if (typeof(T) == typeof(Fp) && Fp.UseExpandedKernels)
+        {
+            Unsafe.SkipInit(out r);
+            FpFused.Square(out Unsafe.As<T, Fp>(ref r), Unsafe.As<T, Fp>(ref Unsafe.AsRef(in a)));
+        }
+        else SquareIsolated(out r, a);
+    }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Inverse(out T r, in T a)
     { if (typeof(T) == typeof(Fp2)) T.Inverse(out r, a); else InverseIsolated(out r, a); }
@@ -67,9 +82,54 @@ internal static class CurveField<T> where T : struct, IField<T>
                 Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in a)), Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in b)),
                 Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in c)), Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in d)));
         }
+        else if (typeof(T) == typeof(Fp) && Fp.UseExpandedKernels)
+        {
+            Unsafe.SkipInit(out r);
+            FpFused.MultiplyDifference(out Unsafe.As<T, Fp>(ref r),
+                Unsafe.As<T, Fp>(ref Unsafe.AsRef(in a)), Unsafe.As<T, Fp>(ref Unsafe.AsRef(in b)),
+                Unsafe.As<T, Fp>(ref Unsafe.AsRef(in c)), Unsafe.As<T, Fp>(ref Unsafe.AsRef(in d)));
+        }
         else
         {
             Multiply(out T t0, a, b); Multiply(out T t1, c, d); Subtract(out r, t0, t1);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void SubtractSum(out T r, in T a, in T b, in T c)
+    {
+        if (typeof(T) == typeof(Fp2))
+        {
+            Unsafe.SkipInit(out r);
+            Fp2Fused.SubtractSum(out Unsafe.As<T, Fp2>(ref r), Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in a)),
+                Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in b)), Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in c)));
+        }
+        else if (typeof(T) == typeof(Fp) && Fp.UseExpandedKernels)
+        {
+            Unsafe.SkipInit(out r);
+            Fp.SubtractSumComposite(out Unsafe.As<T, Fp>(ref r), Unsafe.As<T, Fp>(ref Unsafe.AsRef(in a)),
+                Unsafe.As<T, Fp>(ref Unsafe.AsRef(in b)), Unsafe.As<T, Fp>(ref Unsafe.AsRef(in c)));
+        }
+        else { Subtract(out T t, a, b); Subtract(out r, t, c); }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void MultiplySum(out T r, in T a, in T b, in T c, in T d)
+    {
+        if (typeof(T) == typeof(Fp2))
+        {
+            Unsafe.SkipInit(out r);
+            Fp2Fused.MultiplySum(out Unsafe.As<T, Fp2>(ref r),
+                Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in a)), Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in b)),
+                Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in c)), Unsafe.As<T, Fp2>(ref Unsafe.AsRef(in d)));
+        }
+        else if (typeof(T) == typeof(Fp) && Fp.UseExpandedKernels)
+        {
+            Unsafe.SkipInit(out r);
+            FpFused.MultiplySum(out Unsafe.As<T, Fp>(ref r),
+                Unsafe.As<T, Fp>(ref Unsafe.AsRef(in a)), Unsafe.As<T, Fp>(ref Unsafe.AsRef(in b)),
+                Unsafe.As<T, Fp>(ref Unsafe.AsRef(in c)), Unsafe.As<T, Fp>(ref Unsafe.AsRef(in d)));
+        }
+        else { Multiply(out T t0, a, b); Multiply(out T t1, c, d); Add(out r, t0, t1); }
     }
 }
