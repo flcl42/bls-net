@@ -1,5 +1,10 @@
 # Algorithm and operation-count audit
 
+This is the historical audit before the field kernels were merged. The
+[round 3 report](agentG-round3-report.md) gives current policy-dependent counts
+and measurements. Its final implementation excludes the unmerged repeated-point
+MSM and identity-exponent shortcuts discussed in this audit.
+
 This audit compares the Agent G implementation with pinned blst
 `f62244ef50ad1a603decdb8f215e982d2a467bb6`, with `__FP2x2__` enabled.
 Counts describe source formulas, not CPU instructions. An Fp product means

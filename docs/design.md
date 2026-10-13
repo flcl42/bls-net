@@ -65,13 +65,17 @@ Fp2 square uses two CIOS multiplications. Expanded mode inlines the imaginary pr
 
 `WideTower.Multiply2` forms unreduced Fp2 products. For canonical inputs, the real component has magnitude below p² and the imaginary component lies in [0, 2p²). `Add2`, `Subtract2` and `NonResidue2` combine them. `Multiply6`, `MultiplyBy0Y06` and `MultiplyByXY06` produce wide Fp6 results; `Reduce6` or `Reduce6Small` finishes them.
 
+Expanded wide Fp2 multiplication writes its products into the final scratch buffers and uses `SubtractWideProducts` to combine them. Expanded Fp6 squaring delays reduction until all six output base-field coordinates are formed, reducing twelve raw products six times. Its wide Fp2 squares use a modular real difference: each component lies in [0, 2p²), and is congruent to the required square. The Fp6 output C0/C1 components have magnitude below 8p²; C2 can reach 12p² and uses the full signed reducer. Compact mode retains the narrow Fp6 square.
+
+`FpFused` and `Fp2Fused` combine two canonical products before reduction. Base-field sums/differences use two raw products and one reduction. Complex sums/differences use six raw products and two reductions. Real magnitudes are below 2p²; complex sum imaginary values lie in [0, 4p²), so the positive reducer applies. All inputs are consumed before assigning the output, including when a scalar coefficient aliases it. These formulas are selected only in expanded mode by their algorithm callers; compact mode keeps separate products. Fused subtraction chains also preserve the original compact calls.
+
 Interval bounds are 8p² for Fp6 products, 9p² for sparse products and 22p² for full Fp12 products. The first two fit the pR bound; the last fits 3pR < 2^767. The formulas reduce once per output base-field coordinate. Narrow inputs and wide output scratch buffers must be distinct. Any new lazy formula must establish its bounds before selecting a reducer. Fully lazy Fp4 and cyclotomic variants were slower and were discarded.
 
 ## Inlining and calls
 
 Small single-field entry points, including `Fp.Multiply`, remain inlineable for isolated operations. Inlining the same carry chains into a large point, tower or square-root method can exceed JIT optimization budgets and increase register pressure.
 
-`CurveField<T>` isolates field operations used by generic point kernels with `NoInlining | AggressiveOptimization` wrappers. Fp2 multiplication and square have inlineable policy dispatchers and isolated implementation kernels; its other larger arithmetic operations also have isolated entry points. Larger arithmetic formulas use `Fp.MultiplyComposite` to keep the Fp kernel compact. `FpCurveRoots` applies this pattern to the fixed square-root chain. Small coordinate moves and scalar logic can remain inline. Calling policies must be measured on each target runtime; forcing the public multiply to be non-inlined did not improve both stock and patched runtimes.
+`CurveField<T>` preserves isolated Fp arithmetic calls and lets generic Fp2 callers reach their already-isolated kernels directly. Expanded base-field squaring uses the concrete `FpFused.Square` helper; larger products use `Fp.MultiplyComposite`. Fp2 multiplication and square have inlineable policy dispatchers and isolated implementation kernels. Expanded point completion and Horner evaluation select fused product helpers, while compact mode keeps the original calls. `FpCurveRoots` specializes one shared fixed chain with an expanded square helper or compact equal-operand multiplication. Small coordinate moves and scalar logic remain inline. Calling policies must be measured on each target runtime; forcing public multiplication to be non-inlined did not improve both stock and patched runtimes.
 
 The Fp Montgomery row loop processes two rows per iteration. Three-row and fully expanded Montgomery variants increased spills and were discarded. The experimental JIT bounds full-adder analysis at 8,192 nodes and 128 candidates, with 262,144 liveness-scan visits and 65,536 extended carry-use visits. This lets composite small-constant Fp2 operations keep their carries in flags. Large inline kernels still need independent benchmark methods to avoid spending allowances on unrelated switch cases. Raw multiplication benefits from full expansion behind a compact call. [Performance](performance.md#kernel-and-jit-details) describes the carry idioms and runtime patch, and the [round 2 field-kernel report](field-kernel-round2-report.md) records the previous experiments. The [round 3 field report](field-kernel-round3-report.md) profiles composite callers and records the square and disjoint-output kernels.
 
@@ -97,6 +101,8 @@ For fewer than 32 effective points, and for exactly 32 effective points after de
 
 Large inputs group points by signed digit and reduce each bucket in balanced affine-addition rounds. One Montgomery batch inversion supplies all slopes in a round. Repeated points use doubling, inverse points cancel, and infinity is skipped. Batch-affine accumulation uses max(2, projective window width - 1). The thresholds below count effective points after decomposition (so G2 net11.0 begins at 32 original points).
 
+A nonempty bucket can reduce to affine infinity. Its final conversion to XYZZ must keep ZZ/ZZZ zero; assigning one to those scales would create the invalid finite point (0,0). Cancellation regressions cover both groups, fully cancelled buckets and surviving points in other buckets.
+
 | Group and runtime policy | Batch-affine threshold |
 |---|---:|
 | G1, either mode | n ≥ 512 |
@@ -110,6 +116,8 @@ The G2 threshold follows the same runtime policy and test overrides as the field
 `MapToCurve.MapToG1` and `MapToG2` accept Fp and Fp2 values. They apply optimized simplified SWU (SSWU), homogeneous isogenies to the BLS12-381 curves, and cofactor clearing. G1 uses the 11-isogeny and clearing by 1 - z; G2 uses the 3-isogeny and a psi-based clearing formula.
 
 Fixed reciprocal-square-root addition chains and Fp2 root checks select the SSWU candidate and its sign. `FieldRoots` and `FpCurveRoots` keep these arithmetic chains separate from the larger map formulas. Constants are in `MapConstants1`, `MapConstants2` and `CurveConstants`; the generator reads the pinned optional blst sources.
+
+The fixed root chain selects a concrete squaring helper in expanded mode and the original multiply-with-equal-operands calls in compact mode. Both execute the same exponent. G2 SSWU specializes its fixed -2-u, pure imaginary and equal-component constants. Isogenies generate only the powers needed by their polynomial degrees (four entries for G2, sixteen for G1). Expanded Horner steps combine both products before reduction; monic leading terms omit multiplication by one. Native map comparisons and independent affine polynomial identities cover the projective formulas.
 
 Each map returns a subgroup point. Mapping field elements does not hash messages. Hash-to-field, expand-message and message hash-to-curve with a domain separation tag (DST) remain open.
 
@@ -126,6 +134,8 @@ public static bool PairingCheck(ReadOnlySpan<G1Affine> p,
 ```
 
 Miller loops use blst's line formulas and negative-z schedule. Up to 64 active pairs share a pass with bounded stack storage and shared accumulator squarings. Scratch spans are sized to min(64, input count); larger inputs multiply the pass results. Infinity pairs are skipped. Sparse Fp12 multiplication evaluates line coefficients at each G1 point. Conjugation accounts for the negative curve parameter. Every line coordinate is assigned before use, without clearing the line buffer first.
+
+Expanded batches with at least two active pairs combine adjacent lines first. Their product has five nonzero Fp2 coefficients (C1.C0 is zero); forming it and multiplying the accumulator uses 69 base-field products and 22 reductions, versus 78 and 24 for two separate sparse multiplications. The first two lines initialize the accumulator directly. Odd remaining lines use the ordinary sparse multiply. The paired loop trims its scratch span to the active count, including partially filled batches and infinity gaps. Compact mode retains the original loop. This optimization depends on batch size and applies to arbitrary line values.
 
 Final exponentiation first uses inversion, conjugation and a Frobenius map to enter the cyclotomic subgroup. The hard part follows blst's fixed chain of powers of z and z/2. Runs of at least 15 squarings use Karabina compression (ePrint 2010/542, Theorems 3.1–3.2), retaining C0.C1, C0.C2, C1.C0 and C1.C2. Two Fp4 squares update them; one Fp2 inversion reconstructs the omitted coefficients at the end of each run. The zero and identity cases are handled explicitly. The internal repeated-square helper requires a cyclotomic input or zero and tolerates output/input aliasing; arbitrary Fp12 inputs must use ordinary squaring.
 

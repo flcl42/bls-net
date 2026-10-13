@@ -9,6 +9,10 @@ and JIT revisions.
 
 The subsequent [algorithm-layer follow-up](agentG-report.md) records three-runtime before/after measurements, native Fp6 timings, full MSM sweeps, integration profiles, local commits and validation. It includes compressed final-exponentiation powers, an early return when the easy part yields one, and endomorphism-derived multiplication/MSM tables. The [operation-count audit](algorithm-audit.md) explains both the gains and the remaining gaps. The historical measurements below are retained as their original captures.
 
+The [round 3 algorithm report](agentG-round3-report.md) measures the merged field kernels plus fused tower/map operations and paired Miller lines. It includes matched before/after captures on all three runtimes, full MSM sweeps, normal-input precompile profiles, bounds and validation. The retained changes use compact fallbacks on stock .NET 10.
+
+The historical [algorithm-layer follow-up](agentG-report.md) includes an unmerged prototype with repeated-point MSM and identity-exponent shortcuts. Its measurements and the original [operation-count audit](algorithm-audit.md) remain as their original captures. Those shortcuts are excluded from the current implementation and round 3 profiles.
+
 The follow-up uses Agent F's final shared JIT update for both patched baseline and final captures, with Fp/Fp2 source changes still unmerged. General final exponentiation improves by about 9%, G2 multiplication by about 29%, and all sampled patched MSM sizes beat their same-process native timings. General pairing and maps still retain gaps; the full report distinguishes those paths from repeated-point MSMs and cancelling-pair precompile inputs.
 
 On stock .NET 10, the managed EIP-2537 precompiles are about 1.8–4× slower than blst. With the experimental carry-aware JIT, G1 operations take 0.83–1.02× blst's time, G2 addition 0.81×, G2 MSM about 1.00–1.12×, maps 1.06–1.12× and pairing checks 1.15–1.19×. Most operations reach or approach parity; pairing retains a 15–19% gap. Ratios are managed time divided by blst time, so lower is faster.
@@ -178,6 +182,8 @@ dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f n
 The test projects default to net11.0. Build the net10.0 runners with `dotnet build Nethermind.Crypto.BlsNet.slnx -c Release -p:BlsNetTestTargetFramework=net10.0`; changing only the launcher does not retarget the assembly. `scripts/test-field-runtime-matrix.ps1` builds both targets and runs all three suites, kernel tests and optional timing sweeps sequentially, with both kernel modes on every compatible runtime. Native comparisons require the optional reference build described in the [README](../README.md#build-and-test). Without it, managed timings still run and native columns are skipped.
 
 On a shared Windows host, `BLST_BENCH_PROCESSOR` optionally pins the runners to one logical processor. `BLST_BENCH_ROUND_MS` enables shorter arithmetic/curve rounds and best-of-21 sampling to reduce scheduler interruptions; default runner settings retain the historical best-of-seven mode. Curve rounds adapt their iteration count toward the supplied millisecond duration. Pairing short rounds use 1,000 tower iterations and 10 pairing iterations, with the same counts for native and managed operations. Warmup remains at least 0.5 seconds per operation.
+
+`BLST_BENCH_FILTER` optionally selects operation names containing any of its `|`-separated strings, case-insensitively. It filters measurements without changing input generation. Unset it for the full tables, including the two-line sparse-product comparison.
 
 ## Kernel and JIT details
 

@@ -1,5 +1,10 @@
 # Agent G algorithm-layer report
 
+Historical prototype results: the later merge omits commit `8b06b0a` and its
+repeated-point/identity-exponent shortcuts. See the [round 3 report](agentG-round3-report.md)
+for the current implementation, normal-input integration profiles and timings
+after the field-kernel merge.
+
 Measured on 2026-10-13 in the supplied Windows VM (Ryzen 9 9950X3D,
 12 exposed logical processors). All values below are **microseconds per operation**.
 The baseline library is `a6d129e`; implementation commits are `19c18df` and
