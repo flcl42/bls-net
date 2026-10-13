@@ -242,7 +242,9 @@ public readonly struct Fp : IEquatable<Fp>
         ulong t5 = 0;
         ulong t6 = 0;
 
-        for (int i = 0; i < 6; i++)
+        // Two rows per iteration: the twelve live words leave few spare registers, and
+        // every iteration of the loop costs register shuffles at its back edge.
+        for (int i = 0; i < 6; i += 2)
         {
             ulong b = Unsafe.Add(ref bRef, i);
 
@@ -255,6 +257,25 @@ public readonly struct Fp : IEquatable<Fp>
             t6 = carry;
 
             ulong q = t0 * N0;
+            carry = MulAdd(q, M0, t0, 0, out _);
+            carry = MulAdd(q, M1, t1, carry, out t0);
+            carry = MulAdd(q, M2, t2, carry, out t1);
+            carry = MulAdd(q, M3, t3, carry, out t2);
+            carry = MulAdd(q, M4, t4, carry, out t3);
+            carry = MulAdd(q, M5, t5, carry, out t4);
+            t5 = t6 + carry;
+
+            b = Unsafe.Add(ref bRef, i + 1);
+
+            carry = MulAdd(b, a0, t0, 0, out t0);
+            carry = MulAdd(b, a1, t1, carry, out t1);
+            carry = MulAdd(b, a2, t2, carry, out t2);
+            carry = MulAdd(b, a3, t3, carry, out t3);
+            carry = MulAdd(b, a4, t4, carry, out t4);
+            carry = MulAdd(b, a5, t5, carry, out t5);
+            t6 = carry;
+
+            q = t0 * N0;
             carry = MulAdd(q, M0, t0, 0, out _);
             carry = MulAdd(q, M1, t1, carry, out t0);
             carry = MulAdd(q, M2, t2, carry, out t1);

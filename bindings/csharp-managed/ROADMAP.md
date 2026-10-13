@@ -61,18 +61,23 @@ compare against native BLST when `blst.dll` is built in the repository root.
 ## Performance
 
 The `mul+add` benchmarks (`acc = acc * a + b`, 1,000,000 dependent iterations; the runner
-reports the best of 7 rounds, the table the best of three runs) on a Ryzen 9 9950X3D, in ns
-per iteration; runs vary by about 5% on this machine:
+reports the best of 7 rounds, the table the best of five interleaved runs) on a Ryzen 9
+9950X3D, in ns per iteration; runs vary by about 5% on this machine:
 
-| Kernel     | .NET 11 RC1 | .NET with carry-aware JIT | blst (ADX) via P/Invoke |
-|------------|------------:|--------------------------:|------------------------:|
-| Fr mul+add |        26.7 |                      13.3 |                    12.3 |
-| Fp mul+add |        56.9 |                      23.3 |                    21.5 |
+| Kernel     | .NET 11 RC1 | #134039 | #134039 + patch | blst (ADX) via P/Invoke | blst (ADX), C loop |
+|------------|------------:|--------:|----------------:|------------------------:|-------------------:|
+| Fr mul+add |        26.4 |    17.7 |            10.9 |                    12.1 |               11.9 |
+| Fp mul+add |        56.7 |    33.8 |            19.8 |                    20.4 |               20.4 |
 
-The native column calls blst's MULX/ADCX/ADOX assembly through `[SuppressGCTransition]`
-imports, which is within a few percent of the same loop written in C. Without ADX (blst's
-MULQ assembly) that C loop takes 13.2 and 24.8 ns. The numbers are for this isolated loop;
-code that inlines many more operations into one method can exceed the JIT budgets below.
+The native columns call blst's MULX/ADCX/ADOX assembly, through `[SuppressGCTransition]`
+imports and from a C loop over `libblst.a`. Without ADX (blst's MULQ assembly) that C loop
+takes 13.2 and 24.8 ns. The `#134039` columns are the carry-aware JIT described below,
+without and with the patch. With the patch the managed loop was faster in every run,
+by 8-10% for Fr and 2-4% for Fp. Multiplication alone is at parity for Fp (18.7 ns against
+18.6 in C) and about 7% faster for Fr (9.8 against 10.6); the rest comes from the addition,
+which the JIT inlines and reduces with `cmov` while blst calls a function. The numbers are
+for this isolated loop; code that inlines many more operations into one method can exceed
+the JIT budgets below.
 
 The released JIT never keeps a carry in the flags: every carry costs `cmp; setb; movzx` and
 a register, `Math.BigMul` uses MUL, which fixes RDX:RAX and clobbers the flags, and there are
@@ -93,11 +98,19 @@ which recognizes the add/subtract idioms and BigInteger-style multiply-accumulat
 - keeps CF and OF across the rows of a Montgomery multiplication, the `MulAdd` shape above
   (several rows per block, rows of any width, the shorter first lanes of CIOS rows);
 - lets loads, `lea`, non-zero constants and casts sit between a carry and its consumer;
+- turns the constant-time select `t ^ ((t ^ s) & (0 - carry))` after a carry or borrow chain
+  into `cmov`s that read the chain's flags, so the final conditional subtraction no longer
+  turns the carry into a mask (`setb; movzx; neg`, then `xor; and; xor` per limb, all on the
+  critical path);
+- keeps following a carry to its single consumer in large blocks, where the PR's scan gave up
+  after 64 nodes and left the last limb of a long chain going through a register;
 - also optimizes OSR methods, whose Tier0 frame can only hold root-method locals, not carry temporaries.
 
 The PR skips methods with exception handling and gives up on full adders in methods larger
-than 2,048 IR nodes, and a fully unrolled 6-limb row loop exceeds its dead-carry scan budget,
-which is why `Fp.Multiply` keeps its loop over rows.
+than 2,048 IR nodes. A fully unrolled 6-limb row loop exceeds that budget, so `Fp.Multiply`
+keeps a loop over rows, two rows per iteration: the twelve live words leave few spare
+registers, and each back edge costs register shuffles (about 4% of an Fp mul+add; on the
+released JIT the two-row loop is about 1% slower).
 
 To reproduce, build that runtime and run the benchmark on its testhost:
 

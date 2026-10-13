@@ -1,8 +1,16 @@
 diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
-index 5ce80283..ff0b997a 100644
+index 5ce80283..771dc49d 100644
 --- a/src/coreclr/jit/lower.cpp
 +++ b/src/coreclr/jit/lower.cpp
-@@ -13566,7 +13566,8 @@ void Lowering::SetFramePointerFromArgSpaceSize()
+@@ -9817,6 +9817,7 @@ void Lowering::AfterLowerBlocks()
+         }
+ #ifdef TARGET_AMD64
+         LowerMultiplyCarryLoops();
++        LowerMaskSelects();
+ #else
+         LowerArm64MultiplyCarryLoops();
+ #endif
+@@ -13566,7 +13567,8 @@ void Lowering::SetFramePointerFromArgSpaceSize()
  bool Lowering::IsCarryLocalDeadOnExit(unsigned local, BasicBlock* block)
  {
      LclVarDsc* dsc = m_compiler->lvaGetDesc(local);
@@ -12,7 +20,7 @@ index 5ce80283..ff0b997a 100644
          (m_compiler->compJmpOpUsed && dsc->lvIsParam) ||
          (m_compiler->lvaKeepAliveAndReportThis() && (local == m_compiler->info.compThisArg)))
      {
-@@ -13676,8 +13677,8 @@ GenTree* Lowering::FindDeadCarryConstantStore(GenTree* constant)
+@@ -13676,8 +13678,8 @@ GenTree* Lowering::FindDeadCarryConstantStore(GenTree* constant)
      }
      unsigned   local = use.User()->AsLclVar()->GetLclNum();
      LclVarDsc* dsc   = m_compiler->lvaGetDesc(local);
@@ -23,7 +31,7 @@ index 5ce80283..ff0b997a 100644
          (m_compiler->lvaKeepAliveAndReportThis() && local == m_compiler->info.compThisArg))
      {
          return nullptr;
-@@ -13972,7 +13973,10 @@ void Lowering::LowerMultiplyCarryLoops()
+@@ -13972,7 +13974,10 @@ void Lowering::LowerMultiplyCarryLoops()
      {
          m_block     = block;
          bool hasAdx = TryLowerMultiplyCarryChain();
@@ -35,7 +43,7 @@ index 5ce80283..ff0b997a 100644
          {
              TryLowerMultiplyCarryBackedge();
              hasAdx |= TryLowerMultiplyCarryLoop();
-@@ -14421,6 +14425,497 @@ bool Lowering::TryLowerMultiplyCarryChain()
+@@ -14421,6 +14426,859 @@ bool Lowering::TryLowerMultiplyCarryChain()
      return true;
  }
  
@@ -101,6 +109,8 @@ index 5ce80283..ff0b997a 100644
 +    jitstd::vector<GenTree*>    lastRef(m_compiler->lvaCount, nullptr, alloc);
 +    jitstd::vector<GenTree*>    storeNode(m_compiler->lvaCount, nullptr, alloc);
 +    jitstd::vector<GenTree*>    readNode(m_compiler->lvaCount, nullptr, alloc);
++    jitstd::vector<GenTree*>    firstRef(m_compiler->lvaCount, nullptr, alloc);
++    jitstd::vector<bool>        addressed(m_compiler->lvaCount, false, alloc);
 +    jitstd::vector<Lane>        lanes(alloc);
 +    unsigned                    index = 0;
 +    for (GenTree* node : BlockRange())
@@ -114,6 +124,10 @@ index 5ce80283..ff0b997a 100644
 +                prevRef.Set(node, lastRef[local]);
 +                nextRef.Set(lastRef[local], node);
 +            }
++            else
++            {
++                firstRef[local] = node;
++            }
 +            lastRef[local] = node;
 +            if (node->OperIsLocalStore())
 +            {
@@ -125,6 +139,10 @@ index 5ce80283..ff0b997a 100644
 +                reads[local]++;
 +                readNode[local] = node;
 +            }
++        }
++        else if (node->OperIs(GT_LCL_ADDR))
++        {
++            addressed[node->AsLclVarCommon()->GetLclNum()] = true;
 +        }
 +        if (node->OperIs(GT_HWINTRINSIC) && (node->AsHWIntrinsic()->GetHWIntrinsicId() == NI_X86Base_X64_BigMul) &&
 +            (node->AsHWIntrinsic()->GetSimdBaseType() == TYP_ULONG))
@@ -140,6 +158,55 @@ index 5ce80283..ff0b997a 100644
 +        bool     found = seq.Lookup(node, &value);
 +        assert(found);
 +        return value;
++    };
++
++    // Whether a local is a temporary of this block: every reference is in the block and the
++    // first one fully defines it, so no value of it can be observed after the block, even
++    // around a loop. This avoids rescanning large blocks that are their own successor. The
++    // count of outside references shares the budget of the dead-on-exit proofs.
++    jitstd::vector<unsigned> outsideRefs(alloc);
++    bool                     outsideRefsCounted = false;
++    auto                     countOutsideRefs   = [&]() -> bool {
++        outsideRefs.resize(m_compiler->lvaCount, 0);
++        for (BasicBlock* other : m_compiler->Blocks())
++        {
++            if (other == m_block)
++            {
++                continue;
++            }
++            for (GenTree* node : LIR::AsRange(other))
++            {
++                if (m_carryLocalScanBudget == 0)
++                {
++                    return false;
++                }
++                m_carryLocalScanBudget--;
++                if (node->OperIsLocal() || node->OperIs(GT_LCL_ADDR))
++                {
++                    outsideRefs[node->AsLclVarCommon()->GetLclNum()]++;
++                }
++            }
++        }
++        return true;
++    };
++    auto isBlockLocal = [&](unsigned local) -> bool {
++        if (outsideRefs.empty())
++        {
++            outsideRefsCounted = countOutsideRefs();
++        }
++        if (!outsideRefsCounted)
++        {
++            return false;
++        }
++        LclVarDsc* dsc    = m_compiler->lvaGetDesc(local);
++        unsigned   parent = dsc->lvIsStructField ? dsc->lvParentLcl : local;
++        // A promoted field is defined by its parent's first store and must not be read before it.
++        return !dsc->IsAddressExposed() && !dsc->lvIsParam && !(m_compiler->opts.IsOSR() && dsc->lvIsOSRLocal) &&
++               !m_compiler->lvaGetDesc(parent)->lvIsParam && (outsideRefs[local] == 0) && (outsideRefs[parent] == 0) &&
++               !addressed[local] && !addressed[parent] && (firstRef[parent] != nullptr) &&
++               firstRef[parent]->OperIs(GT_STORE_LCL_VAR) &&
++               ((parent == local) ||
++                ((stores[local] == 0) && (firstRef[local] != nullptr) && (pos(firstRef[local]) > pos(firstRef[parent]))));
 +    };
 +
 +    // Whether a read is the only reader of the value it observes: the previous reference to
@@ -174,7 +241,7 @@ index 5ce80283..ff0b997a 100644
 +        {
 +            return false;
 +        }
-+        return (next != nullptr) || IsCarryLocalDeadOnExit(local, m_block);
++        return (next != nullptr) || isBlockLocal(local) || IsCarryLocalDeadOnExit(local, m_block);
 +    };
 +
 +    // The only reader of the value a store defines, if there is exactly one.
@@ -530,10 +597,313 @@ index 5ce80283..ff0b997a 100644
 +    return changed;
 +}
 +
++//------------------------------------------------------------------------
++// LowerMaskSelects: Turn constant-time selects written with a mask made from a
++// flags bit,
++//     mask = 0 - bit;  r_i = t_i ^ ((t_i ^ s_i) & mask)   (bit from a SETCC)
++// into CMOVs that read the bit's flags directly. The mask's only uses must be
++// such selects and the flags must still hold the bit at every select, which is
++// typical right after a carry or borrow chain. This removes the SETCC, NEG, AND
++// and XOR latency that the select otherwise adds after the chain.
++//
++void Lowering::LowerMaskSelects()
++{
++    // Like the carry passes, leave methods with handlers alone: a handler can observe
++    // the mask and bit locals this removes.
++    if (m_compiler->compHndBBtabCount != 0)
++    {
++        return;
++    }
++    for (BasicBlock* block : m_compiler->Blocks())
++    {
++        m_block = block;
++        bool hasMask = false;
++        for (GenTree* node : BlockRange())
++        {
++            hasMask |= node->OperIs(GT_NEG);
++        }
++        // A rewrite removes nodes, so look again with fresh reference links after each one.
++        while (hasMask && TryLowerMaskSelect())
++        {
++        }
++    }
++}
++
++//------------------------------------------------------------------------
++// TryLowerMaskSelect: Rewrite the first eligible mask select in the current block;
++// see LowerMaskSelects.
++//
++// Returns:
++//    true if a mask and its selects were rewritten.
++//
++bool Lowering::TryLowerMaskSelect()
++{
++    typedef JitHashTable<GenTree*, JitPtrKeyFuncs<GenTree>, GenTree*>        NodeToNodeMap;
++    typedef JitHashTable<unsigned, JitSmallPrimitiveKeyFuncs<unsigned>, GenTree*> LocalToNodeMap;
++    CompAllocator alloc = m_compiler->getAllocator(CMK_Lower);
++
++    // Link each local reference to the previous and next references to the same local.
++    // Each rewrite rescans the block, so the scans share a budget.
++    NodeToNodeMap  prevRef(alloc);
++    NodeToNodeMap  nextRef(alloc);
++    LocalToNodeMap lastRef(alloc);
++    for (GenTree* node : BlockRange())
++    {
++        if (m_maskSelectScanBudget == 0)
++        {
++            return false;
++        }
++        m_maskSelectScanBudget--;
++        if (node->OperIsLocal())
++        {
++            unsigned local = node->AsLclVarCommon()->GetLclNum();
++            GenTree* last  = nullptr;
++            if (lastRef.Lookup(local, &last))
++            {
++                prevRef.Set(node, last);
++                nextRef.Set(last, node);
++            }
++            lastRef.Set(local, node, LocalToNodeMap::Overwrite);
++        }
++    }
++
++    // Whether the value a read observes has no reader after it: the local is stored
++    // again next, or is dead when the block ends.
++    auto isLastRead = [&](GenTree* read) -> bool {
++        unsigned   local = read->AsLclVar()->GetLclNum();
++        LclVarDsc* dsc   = m_compiler->lvaGetDesc(local);
++        if (dsc->IsAddressExposed() || dsc->lvPromoted || dsc->lvIsStructField)
++        {
++            return false;
++        }
++        GenTree* next = nullptr;
++        return nextRef.Lookup(read, &next) ? next->OperIs(GT_STORE_LCL_VAR) : IsCarryLocalDeadOnExit(local, m_block);
++    };
++
++    struct Select
++    {
++        GenTree* outer;
++        GenTree* andNode;
++        GenTree* inner;
++        GenTree* maskRead;
++        GenTree* innerT;
++        GenTree* s;
++        GenTree* t;
++    };
++    jitstd::vector<Select> selects(alloc);
++
++    for (GenTree* maskStore : BlockRange())
++    {
++        if (!maskStore->OperIs(GT_STORE_LCL_VAR) || !maskStore->TypeIs(TYP_INT, TYP_LONG) ||
++            !maskStore->gtGetOp1()->OperIs(GT_NEG) || maskStore->gtGetOp1()->gtSetFlags())
++        {
++            continue;
++        }
++        LclVarDsc* maskDsc = m_compiler->lvaGetDesc(maskStore->AsLclVar()->GetLclNum());
++        if (maskDsc->IsAddressExposed() || maskDsc->lvPromoted || maskDsc->lvIsStructField)
++        {
++            continue;
++        }
++
++        // The negated value must be a bit read from the flags: a SETCC, possibly widened,
++        // possibly stored to a local first, possibly masked with 1.
++        GenTree* neg     = maskStore->gtGetOp1();
++        GenTree* value   = neg->gtGetOp1();
++        GenTree* andOne  = nullptr;
++        GenTree* bitRead = nullptr;
++        GenTree* bitDef  = nullptr;
++        if (value->OperIs(GT_AND) && value->gtGetOp2()->IsIntegralConst(1) && !value->gtSetFlags())
++        {
++            andOne = value;
++            value  = value->gtGetOp1();
++        }
++        if (value->OperIs(GT_LCL_VAR))
++        {
++            bitRead = value;
++            if (!prevRef.Lookup(bitRead, &bitDef) || !bitDef->OperIs(GT_STORE_LCL_VAR) ||
++                m_compiler->lvaGetDesc(bitRead->AsLclVar()->GetLclNum())->IsAddressExposed())
++            {
++                continue;
++            }
++            value = bitDef->gtGetOp1();
++        }
++        GenTree* cast = nullptr;
++        if (value->OperIs(GT_CAST) && !value->gtOverflow() && value->AsCast()->CastOp()->TypeIs(TYP_INT))
++        {
++            cast  = value;
++            value = value->AsCast()->CastOp();
++        }
++        if (!value->OperIs(GT_SETCC) || (GenConditionDesc::Get(value->AsCC()->gtCondition).oper != GT_NONE) ||
++            (value->gtPrev == nullptr) || !value->gtPrev->gtSetFlags())
++        {
++            continue;
++        }
++        GenTree*     cc       = value;
++        GenTree*     producer = cc->gtPrev;
++        GenCondition cond     = cc->AsCC()->gtCondition;
++
++        // Every read of the mask value must be a select t ^ ((t ^ s) & mask).
++        selects.clear();
++        bool     valid = true;
++        GenTree* ref   = maskStore;
++        GenTree* read  = nullptr;
++        while (valid && nextRef.Lookup(ref, &read) && read->OperIs(GT_LCL_VAR))
++        {
++            Select   select = {};
++            LIR::Use maskUse;
++            LIR::Use andUse;
++            valid = BlockRange().TryGetUse(read, &maskUse) && maskUse.User()->OperIs(GT_AND) &&
++                    maskUse.User()->TypeIs(maskStore->TypeGet()) && !maskUse.User()->gtSetFlags();
++            if (valid)
++            {
++                select.maskRead = read;
++                select.andNode  = maskUse.User();
++                select.inner =
++                    (select.andNode->gtGetOp1() == read) ? select.andNode->gtGetOp2() : select.andNode->gtGetOp1();
++                valid = select.inner->OperIs(GT_XOR) && !select.inner->gtSetFlags() &&
++                        BlockRange().TryGetUse(select.andNode, &andUse) && andUse.User()->OperIs(GT_XOR) &&
++                        !andUse.User()->gtSetFlags();
++            }
++            if (valid)
++            {
++                select.outer = andUse.User();
++                select.t     = (select.outer->gtGetOp1() == select.andNode) ? select.outer->gtGetOp2()
++                                                                            : select.outer->gtGetOp1();
++                valid = select.t->OperIs(GT_LCL_VAR);
++            }
++            for (unsigned i = 0; valid && (i < 2); i++)
++            {
++                GenTree* candidate = (i == 0) ? select.inner->gtGetOp1() : select.inner->gtGetOp2();
++                if (candidate->OperIs(GT_LCL_VAR) &&
++                    (candidate->AsLclVar()->GetLclNum() == select.t->AsLclVar()->GetLclNum()))
++                {
++                    select.innerT = candidate;
++                    select.s      = (i == 0) ? select.inner->gtGetOp2() : select.inner->gtGetOp1();
++                }
++            }
++            // A zero s would be materialized with a flag-clobbering XOR once uncontained.
++            valid = valid && (select.innerT != nullptr) && !select.s->IsIntegralConst(0);
++            // Both reads of t must observe the same value: no store to t between them. Both
++            // precede the outer XOR, in either order.
++            GenTree* laterT = nullptr;
++            GenTree* node   = valid ? select.outer->gtPrev : nullptr;
++            for (; valid && (node != nullptr); node = node->gtPrev)
++            {
++                if ((node == select.t) || (node == select.innerT))
++                {
++                    if (laterT != nullptr)
++                    {
++                        break;
++                    }
++                    laterT = node;
++                }
++                else if ((laterT != nullptr) && node->OperIsLocalStore() &&
++                         (node->AsLclVarCommon()->GetLclNum() == select.t->AsLclVar()->GetLclNum()))
++                {
++                    valid = false;
++                }
++            }
++            valid = valid && (node != nullptr);
++            if (valid)
++            {
++                selects.push_back(select);
++            }
++            ref = read;
++        }
++        if (!valid || selects.empty() || !isLastRead(selects.back().maskRead))
++        {
++            continue;
++        }
++
++        // The mask must be the bit's only reader, and the SETCC goes too: a SETCC kept for
++        // another reader could still be removed as dead by liveness, which would take
++        // GTF_SET_FLAGS from the producer the CMOVs read.
++        if ((bitRead != nullptr) && !isLastRead(bitRead))
++        {
++            continue;
++        }
++        auto isRemoved = [&](GenTree* node) -> bool {
++            if ((node == neg) || (node == maskStore) || (node == andOne) ||
++                ((andOne != nullptr) && (node == andOne->gtGetOp2())) || (node == bitRead) || (node == cc) ||
++                (node == cast) || (node == bitDef))
++            {
++                return true;
++            }
++            for (const Select& select : selects)
++            {
++                if ((node == select.andNode) || (node == select.inner) || (node == select.maskRead) ||
++                    (node == select.innerT))
++                {
++                    return true;
++                }
++            }
++            return false;
++        };
++
++        // Only nodes that leave the flags alone may remain between the producer and the last select.
++        unsigned remaining  = (unsigned)selects.size();
++        for (GenTree* node = producer->gtNext; valid && (remaining != 0); node = node->gtNext)
++        {
++            bool isSelect = false;
++            for (const Select& select : selects)
++            {
++                isSelect |= (node == select.outer);
++            }
++            remaining -= isSelect ? 1 : 0;
++            valid = (node != nullptr) && (isSelect || isRemoved(node) || IsCarryFlagsCrossing(node));
++        }
++        if (!valid)
++        {
++            continue;
++        }
++
++        JITDUMP("Selecting with the flags of [%06u] in %u CMOVs instead of mask [%06u]\n", producer->gtTreeID,
++                (unsigned)selects.size(), maskStore->gtTreeID);
++        // A select can choose another one's result: Select(Select(a, b, mask), c, mask).
++        NodeToNodeMap rewritten(alloc);
++        for (const Select& select : selects)
++        {
++            GenTree* s = select.s;
++            rewritten.Lookup(s, &s);
++            s->ClearContained();
++            s->ClearRegOptional();
++            select.t->ClearContained();
++            select.t->ClearRegOptional();
++            GenTree* cmov = m_compiler->gtNewOperCC(GT_SELECTCC, select.outer->TypeGet(), cond, s, select.t);
++            rewritten.Set(select.outer, cmov);
++            BlockRange().InsertBefore(select.outer, cmov);
++            LIR::Use use;
++            if (BlockRange().TryGetUse(select.outer, &use))
++            {
++                use.ReplaceWith(cmov);
++            }
++            else
++            {
++                cmov->SetUnusedValue();
++            }
++            for (GenTree* node : {select.outer, select.andNode, select.inner, select.maskRead, select.innerT})
++            {
++                BlockRange().Remove(node);
++            }
++            ContainCheckSelect(cmov->AsOp());
++        }
++        for (GenTree* node :
++             {maskStore, neg, andOne, (andOne != nullptr) ? andOne->gtGetOp2() : nullptr, bitRead, bitDef, cast, cc})
++        {
++            if (node != nullptr)
++            {
++                BlockRange().Remove(node);
++            }
++        }
++        return true;
++    }
++    return false;
++}
++
  //------------------------------------------------------------------------
  // FindMultiplyCarryStore: Find a local's sole store and sole read in this block.
  // Ordinary intermediates require a preceding store and cannot be live out.
-@@ -15311,6 +15806,61 @@ bool Lowering::LowerFullAdders()
+@@ -15311,6 +16169,61 @@ bool Lowering::LowerFullAdders()
      return changed;
  }
  
@@ -595,7 +965,7 @@ index 5ce80283..ff0b997a 100644
  //------------------------------------------------------------------------
  // LowerCarryChains: Fold final-limb consumers, then remove single-use carry
  // materialization and restoration between arithmetic stages in one block.
-@@ -15350,10 +15900,7 @@ void Lowering::LowerCarryChains()
+@@ -15350,10 +16263,7 @@ void Lowering::LowerCarryChains()
              // Folding the final limb can insert its operand reads between a
              // stage's restore and arithmetic. These register copies do not
              // change the restored flags.
@@ -607,7 +977,7 @@ index 5ce80283..ff0b997a 100644
              {
                  restore = restore->gtPrev;
                  restoreBudget--;
-@@ -15430,9 +15977,7 @@ void Lowering::LowerCarryChains()
+@@ -15430,9 +16340,7 @@ void Lowering::LowerCarryChains()
                  continue;
              }
  
@@ -618,7 +988,7 @@ index 5ce80283..ff0b997a 100644
              GenTree* crossing = producer->gtNext;
              unsigned scan     = 64;
              for (; crossing != nullptr && crossing != restore && scan != 0; crossing = crossing->gtNext, scan--)
-@@ -15441,9 +15986,7 @@ void Lowering::LowerCarryChains()
+@@ -15441,9 +16349,7 @@ void Lowering::LowerCarryChains()
                  {
                      continue;
                  }
@@ -629,19 +999,61 @@ index 5ce80283..ff0b997a 100644
                  {
                      break;
                  }
+@@ -15455,10 +16361,26 @@ void Lowering::LowerCarryChains()
+ 
+             // The definition may be removed only if this is its sole read up
+             // to the next definition, and it cannot escape through a live-out.
+-            GenTree* use = store->gtNext;
+-            scan         = 64;
+-            for (; use != nullptr && scan != 0; use = use->gtNext, scan--)
+-            {
++            // The last carry of a chain has no next definition, so like TryLowerAddCarry
++            // continue past the local allowance with the budget shared by the phase.
++            GenTree* use       = store->gtNext;
++            bool     exhausted = false;
++            scan               = 64;
++            for (; use != nullptr; use = use->gtNext)
++            {
++                if (scan != 0)
++                {
++                    scan--;
++                }
++                else if (m_carryUseScanBudget != 0)
++                {
++                    m_carryUseScanBudget--;
++                }
++                else
++                {
++                    exhausted = true;
++                    break;
++                }
+                 if (use->OperIsLocal() && use->AsLclVarCommon()->GetLclNum() == local)
+                 {
+                     if (use->OperIs(GT_STORE_LCL_VAR))
+@@ -15471,7 +16393,7 @@ void Lowering::LowerCarryChains()
+                     }
+                 }
+             }
+-            if (scan == 0 || (use != nullptr && !use->OperIs(GT_STORE_LCL_VAR)))
++            if (exhausted || (use != nullptr && !use->OperIs(GT_STORE_LCL_VAR)))
+             {
+                 continue;
+             }
 diff --git a/src/coreclr/jit/lower.h b/src/coreclr/jit/lower.h
-index 2522ef0c..245cad65 100644
+index 2522ef0c..d78c3058 100644
 --- a/src/coreclr/jit/lower.h
 +++ b/src/coreclr/jit/lower.h
-@@ -182,6 +182,7 @@ private:
+@@ -182,6 +182,9 @@ private:
      void     LowerMultiplyCarryLoops();
      bool     TryLowerMultiplyCarryLoop();
      bool     TryLowerMultiplyCarryChain();
 +    bool     TryLowerMultiplyCarryRows();
++    void     LowerMaskSelects();
++    bool     TryLowerMaskSelect();
      void     TryLowerMultiplyCarryBackedge();
      void     LowerMultiplyCarryMultiplier();
      void     LowerMultiplyCarryLoads();
-@@ -192,6 +193,7 @@ private:
+@@ -192,6 +195,7 @@ private:
      void TryLowerCarryLoop(
          GenTree* sum, GenTree* restore, GenTree* cc, GenTree* cast, GenTree* store, unsigned carryLocal);
      bool IsCarryOperandAvailable(GenTree* operand, GenTree* producer, GenTree** moveStart);
@@ -649,6 +1061,245 @@ index 2522ef0c..245cad65 100644
  #endif
      GenTree* LowerJTrue(GenTreeOp* jtrue);
  #ifdef TARGET_RISCV64
+@@ -696,6 +700,7 @@ private:
+     BasicBlock* m_lastSubtractionBlock = nullptr;
+     unsigned    m_carryLocalScanBudget = 65536; // Node/block budget for current-IR dead-on-exit proofs.
+     unsigned    m_carryUseScanBudget   = 4096;  // Extra node visits beyond the bounded local carry-use scans.
++    unsigned    m_maskSelectScanBudget = 65536; // Node visits for the block rescans of LowerMaskSelects.
+ #endif
+ 
+ #ifdef FEATURE_FIXED_OUT_ARGS
+diff --git a/src/tests/JIT/opt/Add/MaskSelect.cs b/src/tests/JIT/opt/Add/MaskSelect.cs
+new file mode 100644
+index 00000000..49651e64
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/MaskSelect.cs
+@@ -0,0 +1,207 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++// Constant-time selects t ^ ((t ^ s) & (0 - bit)) after carry and borrow chains, which
++// LowerMaskSelects turns into CMOVs reading the flags, and shapes it must leave alone.
++public class MaskSelectTests
++{
++    public struct Words
++    {
++        public ulong A, B, C, D;
++        public Words(ulong a, ulong b, ulong c, ulong d) { A = a; B = b; C = c; D = d; }
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong AddCarry(ulong a, ulong b, ref ulong carry)
++    {
++        ulong sum = a + b;
++        ulong c1 = sum < a ? 1UL : 0UL;
++        ulong result = sum + carry;
++        carry = c1 + (result < sum ? 1UL : 0UL);
++        return result;
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong SubBorrow(ulong a, ulong b, ref ulong borrow)
++    {
++        ulong difference = a - b;
++        ulong b1 = difference > a ? 1UL : 0UL;
++        ulong result = difference - borrow;
++        borrow = b1 + (result > difference ? 1UL : 0UL);
++        return result;
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Select(ulong whenSet, ulong whenClear, ulong mask) => whenClear ^ ((whenClear ^ whenSet) & mask);
++
++    // t + k, or t itself when that overflows 256 bits.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static Words AddUnlessOverflow(Words t, Words k)
++    {
++        ulong s0 = t.A + k.A;
++        ulong carry = s0 < t.A ? 1UL : 0UL;
++        ulong s1 = AddCarry(t.B, k.B, ref carry);
++        ulong s2 = AddCarry(t.C, k.C, ref carry);
++        ulong s3 = AddCarry(t.D, k.D, ref carry);
++        ulong mask = 0UL - (carry & 1UL);
++        return new Words(Select(t.A, s0, mask), Select(t.B, s1, mask), Select(t.C, s2, mask), Select(t.D, s3, mask));
++    }
++
++    // The same with flag-writing arithmetic between the chain and the selects.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static Words AddUnlessOverflowClobbered(Words t, Words k, ulong x, ulong y, out ulong unrelated)
++    {
++        ulong s0 = t.A + k.A;
++        ulong carry = s0 < t.A ? 1UL : 0UL;
++        ulong s1 = AddCarry(t.B, k.B, ref carry);
++        ulong s2 = AddCarry(t.C, k.C, ref carry);
++        ulong s3 = AddCarry(t.D, k.D, ref carry);
++        ulong mask = 0UL - carry;
++        ulong r0 = Select(t.A, s0, mask);
++        unrelated = (x + y) ^ (x - y);
++        ulong r1 = Select(t.B, s1, mask) + unrelated;
++        return new Words(r0, r1 - unrelated, Select(t.C, s2, mask), Select(t.D, s3, mask));
++    }
++
++    // The mask also escapes, so it must stay materialized.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static Words AddUnlessOverflowKeepMask(Words t, Words k, out ulong mask)
++    {
++        ulong s0 = t.A + k.A;
++        ulong carry = s0 < t.A ? 1UL : 0UL;
++        ulong s1 = AddCarry(t.B, k.B, ref carry);
++        ulong s2 = AddCarry(t.C, k.C, ref carry);
++        ulong s3 = AddCarry(t.D, k.D, ref carry);
++        mask = 0UL - carry;
++        return new Words(Select(t.A, s0, mask), Select(t.B, s1, mask), Select(t.C, s2, mask), Select(t.D, s3, mask));
++    }
++
++    // t - k, or t itself on a borrow: the conditional subtraction of modular arithmetic.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static Words SubUnlessBorrow(Words t, Words k)
++    {
++        ulong d0 = t.A - k.A;
++        ulong borrow = d0 > t.A ? 1UL : 0UL;
++        ulong d1 = SubBorrow(t.B, k.B, ref borrow);
++        ulong d2 = SubBorrow(t.C, k.C, ref borrow);
++        ulong d3 = SubBorrow(t.D, k.D, ref borrow);
++        ulong mask = 0UL - borrow;
++        return new Words(Select(t.A, d0, mask), Select(t.B, d1, mask), Select(t.C, d2, mask), Select(t.D, d3, mask));
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static void Flip(ref ulong value) => value = ~value;
++
++    // t is address-exposed, so its read can stay ahead of the masked XOR.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong AddUnlessOverflowExposed(ulong t0, ulong t1, ulong k0, ulong k1)
++    {
++        ulong s0 = t0 + k0;
++        ulong carry = s0 < t0 ? 1UL : 0UL;
++        ulong s1 = AddCarry(t1, k1, ref carry);
++        ulong mask = 0UL - carry;
++        ulong r0 = Select(t0, s0, mask);
++        ulong r1 = Select(t1, s1, mask);
++        Flip(ref t1);
++        return r0 ^ r1 ^ t1;
++    }
++
++    // A select of a select on the same mask.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong NestedSelect(ulong t0, ulong t1, ulong k0, ulong k1, ulong c)
++    {
++        ulong s0 = t0 + k0;
++        ulong carry = s0 < t0 ? 1UL : 0UL;
++        ulong s1 = AddCarry(t1, k1, ref carry);
++        ulong mask = 0UL - carry;
++        return Select(Select(t1, s1, mask), c, mask) ^ Select(t0, s0, mask);
++    }
++
++    // The carry has another reader.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong AddUnlessOverflowKeepCarry(ulong t0, ulong t1, ulong k0, ulong k1, out ulong carryOut)
++    {
++        ulong s0 = t0 + k0;
++        ulong carry = s0 < t0 ? 1UL : 0UL;
++        ulong s1 = AddCarry(t1, k1, ref carry);
++        ulong mask = 0UL - carry;
++        ulong result = Select(t0, s0, mask) ^ Select(t1, s1, mask);
++        carryOut = carry;
++        return result;
++    }
++
++    // A handler observes the mask.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong MaskInHandler(ulong t0, ulong t1, ulong k0, ulong k1, ulong[] sink)
++    {
++        ulong mask = 0;
++        try
++        {
++            ulong s0 = t0 + k0;
++            ulong carry = s0 < t0 ? 1UL : 0UL;
++            ulong s1 = AddCarry(t1, k1, ref carry);
++            mask = 0UL - carry;
++            sink[0] = Select(t0, s0, mask) ^ Select(t1, s1, mask);
++            mask = 0;
++        }
++        catch (IndexOutOfRangeException)
++        {
++            return mask;
++        }
++        return sink[0];
++    }
++
++    private static BigInteger Value(Words w) =>
++        w.A | ((BigInteger)w.B << 64) | ((BigInteger)w.C << 128) | ((BigInteger)w.D << 192);
++
++    [Fact]
++    public static void TestEntryPoint()
++    {
++        var random = new Random(80675);
++        ulong Next() => random.Next(4) switch { 0 => ulong.MaxValue, 1 => 0, 2 => 1, _ => (ulong)random.NextInt64() * 3 + (ulong)random.Next() };
++        BigInteger W256 = BigInteger.One << 256;
++        for (int i = 0; i < 20000; i++)
++        {
++            Words t = new Words(Next(), Next(), Next(), Next());
++            Words k = new Words(Next(), Next(), Next(), Next());
++            BigInteger tv = Value(t), kv = Value(k);
++            BigInteger addExpected = tv + kv >= W256 ? tv : tv + kv;
++
++            if (Value(AddUnlessOverflow(t, k)) != addExpected)
++                throw new Exception("AddUnlessOverflow");
++
++            ulong x = Next(), y = Next();
++            Words clobbered = AddUnlessOverflowClobbered(t, k, x, y, out ulong unrelated);
++            if (unrelated != ((x + y) ^ (x - y)) || Value(clobbered) != addExpected)
++                throw new Exception("AddUnlessOverflowClobbered");
++
++            Words kept = AddUnlessOverflowKeepMask(t, k, out ulong mask);
++            if (mask != (tv + kv >= W256 ? ulong.MaxValue : 0) || Value(kept) != addExpected)
++                throw new Exception("AddUnlessOverflowKeepMask");
++
++            if (Value(SubUnlessBorrow(t, k)) != (tv < kv ? tv : tv - kv))
++                throw new Exception("SubUnlessBorrow");
++
++            UInt128 t2 = new UInt128(t.B, t.A), sum2 = t2 + new UInt128(k.B, k.A);
++            bool overflow = sum2 < t2;
++            ulong r0 = overflow ? t.A : (ulong)sum2, r1 = overflow ? t.B : (ulong)(sum2 >> 64);
++            if (AddUnlessOverflowExposed(t.A, t.B, k.A, k.B) != (r0 ^ r1 ^ ~t.B))
++                throw new Exception("AddUnlessOverflowExposed");
++
++            if (NestedSelect(t.A, t.B, k.A, k.B, t.C) != ((overflow ? t.B : t.C) ^ r0))
++                throw new Exception("NestedSelect");
++
++            if (AddUnlessOverflowKeepCarry(t.A, t.B, k.A, k.B, out ulong carry) != (r0 ^ r1) || carry != (overflow ? 1UL : 0UL))
++                throw new Exception("AddUnlessOverflowKeepCarry");
++
++            if (MaskInHandler(t.A, t.B, k.A, k.B, new ulong[1]) != (r0 ^ r1) ||
++                MaskInHandler(t.A, t.B, k.A, k.B, Array.Empty<ulong>()) != (overflow ? ulong.MaxValue : 0))
++                throw new Exception("MaskInHandler");
++        }
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/MaskSelect.csproj b/src/tests/JIT/opt/Add/MaskSelect.csproj
+new file mode 100644
+index 00000000..5cc7c088
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/MaskSelect.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="MaskSelect.cs" />
++    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
++    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
++  </ItemGroup>
++</Project>
 diff --git a/src/tests/JIT/opt/Add/MontgomeryRows.cs b/src/tests/JIT/opt/Add/MontgomeryRows.cs
 new file mode 100644
 index 00000000..62c124b2
