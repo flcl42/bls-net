@@ -8,7 +8,15 @@ internal static class NativeBlstLoader
             System.Diagnostics.Process.GetCurrentProcess().ProcessorAffinity = (nint)(1L << int.Parse(processor));
     }
 
-    internal static bool TryLoad(out nint handle)
+    internal static bool Load(bool disabled = false)
+    {
+        if (disabled) { Console.WriteLine("SKIP: native blst disabled."); return false; }
+        if (!TryLoad(out nint handle)) return false;
+        NativeLibrary.SetDllImportResolver(typeof(NativeBlstLoader).Assembly, (name, _, _) => name is "blst" or "blst.dll" ? handle : 0);
+        return true;
+    }
+
+    private static bool TryLoad(out nint handle)
     {
         string fileName = OperatingSystem.IsWindows() ? "blst.dll" : OperatingSystem.IsMacOS() ? "libblst.dylib" : "libblst.so";
         for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)

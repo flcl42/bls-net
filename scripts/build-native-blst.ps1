@@ -1,6 +1,5 @@
 param(
-    [string]$W64DevkitVersion = "2.7.0",
-    [switch]$TowerBenchmarks
+    [string]$W64DevkitVersion = "2.7.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,7 +56,7 @@ try {
         $cflags = @("-D__ADX__") + $cflags
     }
 
-    $serverSource = if ($TowerBenchmarks) { Join-Path $repoRoot "scripts/blst-tower.c" } else { Join-Path $blstRoot "src/server.c" }
+    $serverSource = Join-Path $blstRoot "src/server.c"
     & $gcc @cflags "-D__BLST_DLL_MAIN__" -c $serverSource -o "server.o"
     if ($LASTEXITCODE -ne 0) { throw "gcc failed for src/server.c" }
 

@@ -1,7 +1,8 @@
+using static TowerInterop;
 using System.Numerics;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
-internal static unsafe partial class Program
+internal static unsafe partial class TowerTests
 {
     private static void FusedTowerTests()
     {
@@ -177,7 +178,6 @@ internal static unsafe partial class Program
         Fp6 value = new() { C0 = a, C1 = b, C2 = new(a.C1, b.C0) };
         WideTower.Square6(out Fp6 actual6, value); Fp6.Multiply(out Fp6 expected6, value, value);
         Check(Fp6.AreEqual(actual6, expected6), "wide Fp6 square algebraic");
-        if (NativeFp6Available) { Native.blst_fp6_sqr(out expected6, value); Check(Fp6.AreEqual(actual6, expected6), "wide Fp6 square native"); }
         WideTower.Square6(out value, value); Check(Fp6.AreEqual(actual6, value), "wide Fp6 square alias");
     }
 }

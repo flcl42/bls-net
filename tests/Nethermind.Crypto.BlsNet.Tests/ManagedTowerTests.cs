@@ -1,6 +1,7 @@
+using static TowerInterop;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
-internal static unsafe partial class Program
+internal static unsafe partial class TowerTests
 {
     private static void ManagedTowerTests()
     {

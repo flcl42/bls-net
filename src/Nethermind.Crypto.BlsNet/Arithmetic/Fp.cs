@@ -555,12 +555,6 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
         result = acc;
     }
 
-    private static ReadOnlySpan<ulong> PMinus2 =>
-    [
-        0xb9feffffffffaaa9UL, 0x1eabfffeb153ffffUL, 0x6730d2a0f6b0f624UL,
-        0x64774b84f38512bfUL, 0x4b1ba7b6434bacd7UL, 0x1a0111ea397fe69aUL,
-    ];
-
     private static ReadOnlySpan<ulong> PMinus3Div4 =>
     [
         0xee7fbfffffffeaaaUL, 0x07aaffffac54ffffUL, 0xd9cc34a83dac3d89UL,
@@ -648,18 +642,6 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
     {
         Multiply(out Fp value, this, RawOne);
         value.Store(canonical);
-    }
-
-    /// <summary>The canonical (non-Montgomery) value, least significant limb first.</summary>
-    internal void ToCanonicalLimbs(out ulong c0, out ulong c1, out ulong c2, out ulong c3, out ulong c4, out ulong c5)
-    {
-        Multiply(out Fp value, this, RawOne);
-        c0 = value._l0;
-        c1 = value._l1;
-        c2 = value._l2;
-        c3 = value._l3;
-        c4 = value._l4;
-        c5 = value._l5;
     }
 
     private readonly void Store(Span<ulong> limbs)

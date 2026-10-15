@@ -1,7 +1,7 @@
 using Nethermind.Crypto.BlsNet.Curves;
 using Nethermind.Crypto.BlsNet.Hashing;
 
-internal static unsafe partial class Program
+internal static unsafe partial class CurveTests
 {
     private static void TestCancelledAffineBuckets()
     {
@@ -20,7 +20,7 @@ internal static unsafe partial class Program
                 if (pattern == 1 && count % 2 != 0) { scalars[(count - 1) * 32] = 2; G1Projective.Double(expected, out expected); }
                 G1Projective.MultiScalarMultiply(points, scalars, out G1Projective actual);
                 Check(G1Projective.AreEqual(actual, expected) && actual.ToAffine().IsOnCurve(), "G1 cancelled affine bucket identity");
-                if (NativeAvailable) { Native.Msm(points, scalars, out expected); Equal(actual, expected, "G1 cancelled affine bucket native"); }
+                if (NativeAvailable) { CurveNative.Msm(points, scalars, out expected); Equal(actual, expected, "G1 cancelled affine bucket native"); }
             }
         }
         foreach (int count in new[] { 32, 33, 38, 64, 129 })
@@ -38,7 +38,7 @@ internal static unsafe partial class Program
                 if (pattern == 1 && count % 2 != 0) { scalars[(count - 1) * 32] = 2; G2Projective.Double(expected, out expected); }
                 G2Projective.MultiScalarMultiply(points, scalars, out G2Projective actual);
                 Check(G2Projective.AreEqual(actual, expected) && actual.ToAffine().IsOnCurve(), "G2 cancelled affine bucket identity");
-                if (NativeAvailable) { Native.Msm(points, scalars, out expected); Equal(actual, expected, "G2 cancelled affine bucket native"); }
+                if (NativeAvailable) { CurveNative.Msm(points, scalars, out expected); Equal(actual, expected, "G2 cancelled affine bucket native"); }
             }
         }
     }

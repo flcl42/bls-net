@@ -2,7 +2,7 @@ using Nethermind.Crypto.BlsNet.Arithmetic;
 using Nethermind.Crypto.BlsNet.Curves;
 using Nethermind.Crypto.BlsNet.Hashing;
 
-internal static unsafe partial class Program
+internal static unsafe partial class CurveTests
 {
     private static void TestPropertiesAndAllocations()
     {
@@ -18,13 +18,13 @@ internal static unsafe partial class Program
         {
             MapToCurve.MapToG1(u, out G1Projective p);
             Check(p.ToAffine().IsOnCurve() && p.ToAffine().IsInSubgroup(), "G1 map field edge");
-            if (NativeAvailable) { Native.blst_map_to_g1(out G1Projective q, u, null); Equal(p, q, "G1 map field edge native"); }
+            if (NativeAvailable) { CurveNative.blst_map_to_g1(out G1Projective q, u, null); Equal(p, q, "G1 map field edge native"); }
         }
         foreach (Fp2 u in new[] { Fp2.Zero, Fp2.One, new Fp2(minusOne, Fp.Zero), new Fp2(Fp.Zero, Fp.One), new Fp2(Fp.Zero, minusOne), new Fp2(Fp.One, Fp.One), new Fp2(Fp.One, minusOne) })
         {
             MapToCurve.MapToG2(u, out G2Projective p);
             Check(p.ToAffine().IsOnCurve() && p.ToAffine().IsInSubgroup(), "G2 map field edge");
-            if (NativeAvailable) { Native.blst_map_to_g2(out G2Projective q, u, null); Equal(p, q, "G2 map field edge native"); }
+            if (NativeAvailable) { CurveNative.blst_map_to_g2(out G2Projective q, u, null); Equal(p, q, "G2 map field edge native"); }
             Fp2.Square(out Fp2 square, u); Check(FieldRoots.Sqrt(out Fp2 root, square), "Fp2 square root edge");
             Fp2.Square(out Fp2 recovered, root); Check(Fp2.AreEqual(square, recovered), "Fp2 square root equation");
         }
@@ -39,7 +39,7 @@ internal static unsafe partial class Program
             {
                 byte[] scalar = Scalar(BigIntegerOne << bit);
                 G1Projective.Multiply(generator, scalar, out G1Projective actual);
-                if (NativeAvailable) fixed (byte* sp = scalar) { Native.blst_p1_mult(out G1Projective native, g, sp, 256); Equal(actual, native, "G1 scalar bit"); }
+                if (NativeAvailable) fixed (byte* sp = scalar) { CurveNative.blst_p1_mult(out G1Projective native, g, sp, 256); Equal(actual, native, "G1 scalar bit"); }
             }
             for (int i = 0; i < 128; i++)
             {
@@ -95,7 +95,7 @@ internal static unsafe partial class Program
             {
                 byte[] scalar = Scalar(BigIntegerOne << bit);
                 G2Projective.Multiply(generator, scalar, out G2Projective actual);
-                if (NativeAvailable) fixed (byte* sp = scalar) { Native.blst_p2_mult(out G2Projective native, g, sp, 256); Equal(actual, native, "G2 scalar bit"); }
+                if (NativeAvailable) fixed (byte* sp = scalar) { CurveNative.blst_p2_mult(out G2Projective native, g, sp, 256); Equal(actual, native, "G2 scalar bit"); }
             }
             for (int i = 0; i < 128; i++)
             {

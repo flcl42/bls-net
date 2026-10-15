@@ -1,9 +1,10 @@
+using static TowerInterop;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
-internal static unsafe partial class Program
+internal static unsafe partial class TowerTests
 {
     private static readonly BigInteger R = BigInteger.One << 384;
     private static BigInteger RInverse;

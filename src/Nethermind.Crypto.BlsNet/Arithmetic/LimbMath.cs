@@ -49,43 +49,6 @@ internal static class LimbMath
         return true;
     }
 
-    public static void AddMod(Span<ulong> result, ReadOnlySpan<ulong> left, ReadOnlySpan<ulong> right, ReadOnlySpan<ulong> modulus)
-    {
-        ulong carry = 0;
-        for (int i = 0; i < result.Length; i++)
-        {
-            UInt128 sum = (UInt128)left[i] + right[i] + carry;
-            result[i] = (ulong)sum;
-            carry = (ulong)(sum >> 64);
-        }
-
-        Span<ulong> reduced = stackalloc ulong[result.Length];
-        ulong borrow = Subtract(result, modulus, reduced);
-        ulong useReduced = carry | (borrow ^ 1UL);
-        Select(result, reduced, result, ChoiceToMask(useReduced));
-    }
-
-    public static void SubMod(Span<ulong> result, ReadOnlySpan<ulong> left, ReadOnlySpan<ulong> right, ReadOnlySpan<ulong> modulus)
-    {
-        ulong borrow = Subtract(left, right, result);
-        Span<ulong> corrected = stackalloc ulong[result.Length];
-        Copy(result, corrected);
-        AddInPlace(corrected, modulus);
-
-        Select(result, corrected, result, ChoiceToMask(borrow));
-    }
-
-    public static void NegMod(Span<ulong> result, ReadOnlySpan<ulong> value, ReadOnlySpan<ulong> modulus)
-    {
-        Subtract(modulus, value, result);
-        ulong nonZero = NonZeroChoice(value);
-        ulong mask = ChoiceToMask(nonZero);
-        for (int i = 0; i < result.Length; i++)
-        {
-            result[i] &= mask;
-        }
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void MontgomeryMultiply(
         Span<ulong> result,
@@ -187,15 +150,6 @@ internal static class LimbMath
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void Copy(ReadOnlySpan<ulong> source, Span<ulong> destination)
-    {
-        for (int i = 0; i < source.Length; i++)
-        {
-            destination[i] = source[i];
-        }
-    }
-
     private static void Select(Span<ulong> result, ReadOnlySpan<ulong> whenSet, ReadOnlySpan<ulong> whenClear, ulong mask)
     {
         ulong inverse = ~mask;
@@ -209,17 +163,6 @@ internal static class LimbMath
     private static ulong ChoiceToMask(ulong choice)
     {
         return 0UL - (choice & 1UL);
-    }
-
-    private static ulong NonZeroChoice(ReadOnlySpan<ulong> value)
-    {
-        ulong acc = 0;
-        for (int i = 0; i < value.Length; i++)
-        {
-            acc |= value[i];
-        }
-
-        return (acc | (0UL - acc)) >> 63;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -244,19 +187,6 @@ internal static class LimbMath
     {
         low = left + right;
         return low < left ? 1UL : 0UL;
-    }
-
-    private static ulong AddInPlace(Span<ulong> left, ReadOnlySpan<ulong> right)
-    {
-        ulong carry = 0;
-        for (int i = 0; i < left.Length; i++)
-        {
-            UInt128 sum = (UInt128)left[i] + right[i] + carry;
-            left[i] = (ulong)sum;
-            carry = (ulong)(sum >> 64);
-        }
-
-        return carry;
     }
 
     private static ulong Subtract(ReadOnlySpan<ulong> left, ReadOnlySpan<ulong> right, Span<ulong> result)

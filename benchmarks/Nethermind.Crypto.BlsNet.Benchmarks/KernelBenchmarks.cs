@@ -3,15 +3,14 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
-internal static unsafe partial class Program
+internal static unsafe partial class TowerBenchmarks
 {
     private static Fp2 _fp2Sink;
     private static FpWide _wideSink;
 
-    private static void KernelTimings()
+    internal static void RunKernels(bool nativeAvailable)
     {
-        if (OperatingSystem.IsWindows() && int.TryParse(Environment.GetEnvironmentVariable("KERNEL_CPU"), out int cpu) && cpu >= 0 && cpu < Math.Min(Environment.ProcessorCount, 64))
-            Process.GetCurrentProcess().ProcessorAffinity = (nint)(1L << cpu);
+        NativeAvailable = nativeAvailable;
         Fp2 a = Field2(), b = Field2();
         string[] names = ["Fp multiply", "Fp square", "Fp2 multiply", "Fp2 square", "Fp inverse",
             "MultiplyWide", "ReduceWide", "ReduceWideSmall", "AddWide", "SubtractWide", "AddUnreduced", "Halve", "Negate", "SubtractSumComposite",
@@ -21,10 +20,9 @@ internal static unsafe partial class Program
         Console.WriteLine("Operation | managed ns | blst ns | managed bytes");
         for (int op = 0; op < names.Length; op++)
         {
-            string? filter = Environment.GetEnvironmentVariable("KERNEL_FILTER");
-            if (filter is not null && !names[op].Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
-            if ((op == 17 || op == 24) && Environment.GetEnvironmentVariable("SKIP_NEW_KERNELS") == "1") continue;
+            if (!BenchmarkOptions.Matches(names[op])) continue;
             int count = op == 4 ? 30000 : 1000000;
+            if (BenchmarkOptions.Quick) count /= 10;
             double managed = MeasureKernel(op, false, count, a, b, x, y, out long allocated);
             double native = NativeAvailable && (op < 5 || op is 12 or 14 or 15 or 16 or 19 or 20 or 21 or 22 or 23) ? MeasureKernel(op, true, count, a, b, x, y, out _) : double.NaN;
             Console.WriteLine($"{names[op]} | {managed:F2} | {native:F2} | {allocated}");
@@ -145,20 +143,4 @@ internal static unsafe partial class Program
         for (int i = 0; i < count; i++) Fp.MultiplyWideNoAlias(out r, a, b);
     }
 
-    private static class KernelNative
-    {
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_add(out Fp2 r, in Fp2 a, in Fp2 b);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_sub(out Fp2 r, in Fp2 a, in Fp2 b);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_mul_by_3(out Fp2 r, in Fp2 a);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_mul_by_8(out Fp2 r, in Fp2 a);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_lshift(out Fp2 r, in Fp2 a, nuint count);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp_mul(out Fp r, in Fp a, in Fp b);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp_sqr(out Fp r, in Fp a);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_mul(out Fp2 r, in Fp2 a, in Fp2 b);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_sqr(out Fp2 r, in Fp2 a);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp_inverse(out Fp r, in Fp a);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp_add(out Fp r, in Fp a, in Fp b);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp_sub(out Fp r, in Fp a, in Fp b);
-        [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp_cneg(out Fp r, in Fp a, byte flag);
-    }
 }

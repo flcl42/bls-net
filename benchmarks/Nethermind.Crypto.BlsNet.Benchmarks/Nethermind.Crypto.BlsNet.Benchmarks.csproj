@@ -2,12 +2,11 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFramework>$(BlsNetTestTargetFramework)</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
-
   <ItemGroup>
     <ProjectReference Include="../../src/Nethermind.Crypto.BlsNet/Nethermind.Crypto.BlsNet.csproj" />
+    <Compile Include="../../shared/*.cs" Link="Interop/%(Filename)%(Extension)" />
   </ItemGroup>
-  <ItemGroup><Compile Include="../../tests/NativeBlstLoader.cs" Link="NativeBlstLoader.cs" /></ItemGroup>
 </Project>

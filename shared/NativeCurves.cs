@@ -2,14 +2,8 @@ using System.Runtime.InteropServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 using Nethermind.Crypto.BlsNet.Curves;
 
-internal static unsafe class Native
+internal static unsafe class CurveNative
 {
-    internal static bool Load()
-    {
-        if (!NativeBlstLoader.TryLoad(out nint handle)) return false;
-        NativeLibrary.SetDllImportResolver(typeof(Native).Assembly, (name, _, _) => name == "blst" ? handle : 0);
-        return true;
-    }
     [DllImport("blst", CallingConvention = CallingConvention.Cdecl)]
     internal static extern G1Affine* blst_p1_affine_generator();
     [DllImport("blst", CallingConvention = CallingConvention.Cdecl)]

@@ -1,51 +1,40 @@
-using System.Diagnostics;
+using static TowerInterop;
 using System.Numerics;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 using Nethermind.Crypto.BlsNet.Curves;
 using Pair = Nethermind.Crypto.BlsNet.Pairing.Pairing;
 
-internal static unsafe partial class Program
+internal static unsafe partial class TowerTests
 {
     private static readonly Random Random = new(2537);
     private static readonly BigInteger P = BigInteger.Parse("1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab", System.Globalization.NumberStyles.HexNumber);
     private static readonly ulong[] PMinus2 = [0xb9feffffffffaaa9, 0x1eabfffeb153ffff, 0x6730d2a0f6b0f624, 0x64774b84f38512bf, 0x4b1ba7b6434bacd7, 0x1a0111ea397fe69a];
     private static int _checks;
     private static bool NativeAvailable;
-    private static bool NativeFp6Available;
-    private static Fp12 _sink;
-    private static Fp _fpSink;
-    private static bool _boolSink;
 
-    private static void Main(string[] args)
+    internal static int Run(bool nativeAvailable, string? diagnostic)
     {
-        // Set the switch before any field method initializes the kernel policy.
-        if (args.Contains("--expanded-kernels")) AppContext.SetSwitch("Nethermind.Crypto.BlsNet.UseExpandedKernels", true);
-        if (args.Contains("--compact-kernels")) AppContext.SetSwitch("Nethermind.Crypto.BlsNet.UseExpandedKernels", false);
-        NativeBlstLoader.PinBenchmarkProcessor();
-        NativeAvailable = NativeBlstLoader.TryLoad(out nint handle);
-        NativeFp6Available = NativeAvailable && NativeLibrary.TryGetExport(handle, "blst_fp6_mul", out _)
-            && NativeLibrary.TryGetExport(handle, "blst_fp6_sqr", out _);
-        if (NativeAvailable) NativeLibrary.SetDllImportResolver(Assembly.GetExecutingAssembly(), (name, _, _) => name == "blst" ? handle : 0);
-        Console.WriteLine(RuntimeInformation.FrameworkDescription);
-        if (args.Contains("--kernel-cold-start")) { ColdKernelStart(); return; }
-        if (args.Contains("--square-cold-start")) { ColdSquareStart(); return; }
-        Console.WriteLine($"Field kernels: {(Fp.UseExpandedKernels ? "expanded" : "compact")}");
-        if (args.Contains("--kernel-policy")) { KernelPolicyDiagnostics(); return; }
-        if (args.Contains("--kernel-timing")) { KernelTimings(); return; }
-        if (args.Contains("--kernel-tests")) { KernelTests(); Console.WriteLine($"Passed {_checks:N0} kernel checks."); return; }
-        if (args.Contains("--fused-tests")) { FusedTowerTests(); Console.WriteLine($"Passed {_checks:N0} fused checks."); return; }
-        if (args.Contains("--timing") || args.Contains("--perf")) { Timings(args.Contains("--perf")); return; }
+        NativeAvailable = nativeAvailable;
+        switch (diagnostic)
+        {
+            case "--kernel-cold-start": ColdKernelStart(); return _checks;
+            case "--square-cold-start": ColdSquareStart(); return _checks;
+            case "--kernel-policy": KernelPolicyDiagnostics(); return _checks;
+        }
         Check(sizeof(Fp6) == 288 && sizeof(Fp12) == 576, "layout");
+        int before = _checks;
         KernelTests();
+        Console.WriteLine($"Kernels: {_checks - before:N0} checks.");
+        before = _checks;
         FusedTowerTests();
         InversionTests();
         ManagedTowerTests();
-        if (NativeAvailable) TowerTests();
+        if (NativeAvailable) NativeTowerTests();
         PairingTests();
-        Console.WriteLine($"Passed {_checks:N0} checks.");
+        Console.WriteLine($"Tower/pairing: {_checks - before:N0} checks.");
+        return _checks;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -159,7 +148,7 @@ internal static unsafe partial class Program
         Console.WriteLine("Fp inversion: 10,000 random values, powers of two, near-modulus values and aliases passed.");
     }
 
-    private static void TowerTests()
+    private static void NativeTowerTests()
     {
         for (int i = 0; i < 2500; i++)
         {
@@ -312,144 +301,5 @@ internal static unsafe partial class Program
             for (int i = 0; i < p.Length; i++) { pp[i] = px + i; qq[i] = qx + i; }
             Native.blst_miller_loop_n(out f, qq, pp, (nuint)p.Length);
         }
-    }
-    [StructLayout(LayoutKind.Sequential)] private struct P1 { public Fp X, Y, Z; }
-    [StructLayout(LayoutKind.Sequential)] private struct P2 { public Fp2 X, Y, Z; }
-    private static class Native
-    {
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp_mul(out Fp r, in Fp a, in Fp b);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp_sqr(out Fp r, in Fp a);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp2_mul(out Fp2 r, in Fp2 a, in Fp2 b);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp2_sub(out Fp2 r, in Fp2 a, in Fp2 b);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp2_sqr(out Fp2 r, in Fp2 a);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp_inverse(out Fp r, in Fp a);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp12_mul(out Fp12 r, in Fp12 a, in Fp12 b);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp12_sqr(out Fp12 r, in Fp12 a);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp6_mul(out Fp6 r, in Fp6 a, in Fp6 b);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp6_sqr(out Fp6 r, in Fp6 a);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp12_cyclotomic_sqr(out Fp12 r, in Fp12 a);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp12_inverse(out Fp12 r, in Fp12 a);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp12_frobenius_map(out Fp12 r, in Fp12 a, nuint n);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_fp12_mul_by_xy00z0(out Fp12 r, in Fp12 a, in Fp6 packed);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_miller_loop(out Fp12 r, in G2Affine q, in G1Affine p);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_miller_loop_n(out Fp12 r, G2Affine** q, G1Affine** p, nuint n);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_final_exp(out Fp12 r, in Fp12 f);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern P1* blst_p1_generator();
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern P2* blst_p2_generator();
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_p1_mult(out P1 r, P1* p, byte* scalar, nuint bits);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_p2_mult(out P2 r, P2* p, byte* scalar, nuint bits);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_p1_to_affine(out G1Affine r, in P1 p);
-        [DllImport("blst", CallingConvention = CallingConvention.Cdecl)] internal static extern void blst_p2_to_affine(out G2Affine r, in P2 p);
-    }
-
-    private static void Timings(bool quick)
-    {
-        Fp12 a = Field12(), b = Field12(); Fp fp = Field();
-        G1Affine[] ps = new G1Affine[8]; G2Affine[] qs = new G2Affine[8];
-        for (int i = 0; i < 8; i++) Points(out ps[i], out qs[i]);
-        Pair.MillerLoop(ps.AsSpan(0, 1), qs.AsSpan(0, 1), out Fp12 f);
-        Pair.FinalExponentiation(f, out Fp12 cyclo);
-        string[] names = ["Fp inverse", "Fp inverse Fermat", "Fp12 multiply", "Fp12 square", "Cyclotomic square", "Miller 1", "Miller 8", "Final exponentiation", "Pairing check 1", "Pairing check 2", "Pairing check 8", "Fp6 multiply", "Fp6 square", "Fp12 sparse multiply", "Fp12 two sparse multiplies"];
-        Console.WriteLine("Operation | managed ns | native ns | managed bytes");
-        string[]? filters = Environment.GetEnvironmentVariable("BLST_BENCH_FILTER")?.Split('|');
-        for (int op = quick ? 2 : 0; op < names.Length; op++)
-        {
-            if (filters is not null && !Array.Exists(filters, filter => names[op].Contains(filter, StringComparison.OrdinalIgnoreCase))) continue;
-            int iterations = op <= 4 || op >= 11 ? (quick ? 5000 : 30000) : (quick ? 60 : 250);
-            if (Environment.GetEnvironmentVariable("BLST_BENCH_ROUND_MS") is not null)
-                iterations = op <= 4 || op >= 11 ? 1000 : 10;
-            double m = Measure(op, false, iterations, fp, a, b, cyclo, f, ps, qs, out long allocated);
-            double n = !NativeAvailable || op == 1 || op is 11 or 12 && !NativeFp6Available ? double.NaN : Measure(op, true, iterations, fp, a, b, cyclo, f, ps, qs, out _);
-            Console.WriteLine($"{names[op]} | {m:F2} | {n:F2} | {allocated}");
-        }
-        foreach (bool native in NativeAvailable ? new[] { false, true } : new[] { false })
-        {
-            long best = long.MaxValue;
-            for (int round = 0; round < 9; round++)
-            {
-                long start = Stopwatch.GetTimestamp();
-                KernelLoop(native, 1000000, fp, a.C0.C0.C0);
-                if (round >= 2) best = Math.Min(best, Stopwatch.GetTimestamp() - start);
-            }
-            Console.WriteLine($"Fp multiply {(native ? "native" : "inline")} | {best * 1e3 / Stopwatch.Frequency:F2} ns");
-        }
-        GC.KeepAlive(_sink); GC.KeepAlive(_fpSink); GC.KeepAlive(_boolSink);
-    }
-    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
-    private static void KernelLoop(bool native, int iterations, in Fp a, in Fp b)
-    {
-        Fp r = default;
-        if (native) { for (int i = 0; i < iterations; i++) Native.blst_fp_mul(out r, a, b); }
-        else { for (int i = 0; i < iterations; i++) Fp.Multiply(out r, a, b); }
-        _fpSink = r;
-    }
-    private static double Measure(int op, bool native, int iterations, in Fp fp, in Fp12 a, in Fp12 b, in Fp12 cyclo, in Fp12 f, G1Affine[] ps, G2Affine[] qs, out long allocated)
-    {
-        long warmupStart = Stopwatch.GetTimestamp();
-        do { Run(op, native, iterations, fp, a, b, cyclo, f, ps, qs); }
-        while (Stopwatch.GetTimestamp() - warmupStart < Stopwatch.Frequency / 2);
-        long best = long.MaxValue; allocated = 0;
-        for (int round = 0; round < (Environment.GetEnvironmentVariable("BLST_BENCH_ROUND_MS") is null ? 7 : 21); round++)
-        {
-            long before = GC.GetAllocatedBytesForCurrentThread(), start = Stopwatch.GetTimestamp();
-            Run(op, native, iterations, fp, a, b, cyclo, f, ps, qs);
-            long elapsed = Stopwatch.GetTimestamp() - start, bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (elapsed < best) { best = elapsed; allocated = bytes; }
-        }
-        return best * 1e9 / Stopwatch.Frequency / iterations;
-    }
-    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
-    private static void Run(int op, bool native, int iterations, in Fp fp, in Fp12 a, in Fp12 b, in Fp12 cyclo, in Fp12 f, G1Affine[] ps, G2Affine[] qs)
-    {
-        Fp12 r = default; Fp fr = default;
-        G1Affine** pp = stackalloc G1Affine*[8]; G2Affine** qq = stackalloc G2Affine*[8];
-        fixed (G1Affine* px = ps) fixed (G2Affine* qx = qs)
-        {
-            for (int i = 0; i < 8; i++) { pp[i] = px + i; qq[i] = qx + i; }
-            if (native)
-            {
-                switch (op)
-                {
-                    case 0: for (int i = 0; i < iterations; i++) Native.blst_fp_inverse(out fr, fp); break;
-                    case 2: for (int i = 0; i < iterations; i++) Native.blst_fp12_mul(out r, a, b); break;
-                    case 3: for (int i = 0; i < iterations; i++) Native.blst_fp12_sqr(out r, a); break;
-                    case 4: for (int i = 0; i < iterations; i++) Native.blst_fp12_cyclotomic_sqr(out r, cyclo); break;
-                    case 5: for (int i = 0; i < iterations; i++) Native.blst_miller_loop(out r, qs[0], ps[0]); break;
-                    case 6: for (int i = 0; i < iterations; i++) Native.blst_miller_loop_n(out r, qq, pp, 8); break;
-                    case 7: for (int i = 0; i < iterations; i++) Native.blst_final_exp(out r, f); break;
-                    case 11: for (int i = 0; i < iterations; i++) Native.blst_fp6_mul(out r.C0, a.C0, b.C0); break;
-                    case 12: for (int i = 0; i < iterations; i++) Native.blst_fp6_sqr(out r.C0, a.C0); break;
-                    case 13: for (int i = 0; i < iterations; i++) Native.blst_fp12_mul_by_xy00z0(out r, a, b.C0); break;
-                    case 14: for (int i = 0; i < iterations; i++) { Native.blst_fp12_mul_by_xy00z0(out r, a, b.C0); Native.blst_fp12_mul_by_xy00z0(out r, r, b.C1); } break;
-                    default:
-                        nuint count = op == 8 ? 1u : op == 9 ? 2u : 8u;
-                        for (int i = 0; i < iterations; i++) { Native.blst_miller_loop_n(out r, qq, pp, count); Native.blst_final_exp(out r, r); _boolSink = r.IsOne; }
-                        break;
-                }
-            }
-            else
-            {
-                switch (op)
-                {
-                    case 0: for (int i = 0; i < iterations; i++) Fp.Inverse(out fr, fp); break;
-                    case 1: for (int i = 0; i < iterations; i++) Fp.Pow(out fr, fp, PMinus2); break;
-                    case 2: for (int i = 0; i < iterations; i++) Fp12.Multiply(out r, a, b); break;
-                    case 3: for (int i = 0; i < iterations; i++) Fp12.Square(out r, a); break;
-                    case 4: for (int i = 0; i < iterations; i++) Fp12.CyclotomicSquare(out r, cyclo); break;
-                    case 5: for (int i = 0; i < iterations; i++) Pair.MillerLoop(ps.AsSpan(0, 1), qs.AsSpan(0, 1), out r); break;
-                    case 6: for (int i = 0; i < iterations; i++) Pair.MillerLoop(ps, qs, out r); break;
-                    case 7: for (int i = 0; i < iterations; i++) Pair.FinalExponentiation(f, out r); break;
-                    case 11: for (int i = 0; i < iterations; i++) Fp6.Multiply(out r.C0, a.C0, b.C0); break;
-                    case 12: for (int i = 0; i < iterations; i++) Fp6.Square(out r.C0, a.C0); break;
-                    case 13: for (int i = 0; i < iterations; i++) Fp12.MultiplyBySparse(out r, a, b.C0); break;
-                    case 14: for (int i = 0; i < iterations; i++) SparseTower.MultiplyPair(out r, a, b.C0, b.C1); break;
-                    default:
-                        int count = op == 8 ? 1 : op == 9 ? 2 : 8;
-                        for (int i = 0; i < iterations; i++) _boolSink = Pair.PairingCheck(ps.AsSpan(0, count), qs.AsSpan(0, count));
-                        break;
-                }
-            }
-        }
-        _sink = r; _fpSink = fr;
     }
 }

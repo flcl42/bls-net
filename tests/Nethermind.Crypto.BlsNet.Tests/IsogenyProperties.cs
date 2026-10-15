@@ -2,7 +2,7 @@ using Nethermind.Crypto.BlsNet.Arithmetic;
 using Nethermind.Crypto.BlsNet.Curves;
 using Nethermind.Crypto.BlsNet.Hashing;
 
-internal static unsafe partial class Program
+internal static unsafe partial class CurveTests
 {
     private static void TestIsogenyPolynomials()
     {

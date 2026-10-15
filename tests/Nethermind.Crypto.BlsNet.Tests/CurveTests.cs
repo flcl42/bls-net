@@ -4,7 +4,7 @@ using Nethermind.Crypto.BlsNet.Arithmetic;
 using Nethermind.Crypto.BlsNet.Curves;
 using Nethermind.Crypto.BlsNet.Hashing;
 
-internal static unsafe partial class Program
+internal static unsafe partial class CurveTests
 {
     private static readonly Random Rng = new(0x2537);
     private static int checks;
@@ -22,48 +22,47 @@ internal static unsafe partial class Program
         Fp.TryFromBigEndian(bytes, out Fp r); return r;
     }
     private static Fp2 RandomFp2() => new(RandomFp(), RandomFp());
-    public static void Main(string[] args)
+    internal static int Run(bool nativeAvailable)
     {
-        NativeBlstLoader.PinBenchmarkProcessor();
-        NativeAvailable = Native.Load();
-        if (args.Contains("--bench")) { Benchmark(); return; }
+        NativeAvailable = nativeAvailable;
         if (NativeAvailable) { TestG1(); TestG2(); }
         TestArguments(); TestPropertiesAndAllocations();
-        Console.WriteLine($"PASS: {checks:N0} checks, deterministic seed 0x2537.");
+        Console.WriteLine($"Curves/maps/MSM: {checks:N0} checks, deterministic seed 0x2537.");
+        return checks;
     }
     private static void Equal(in G1Projective managed, in G1Projective native, string message)
     {
-        G1Affine a = managed.ToAffine(); Native.blst_p1_to_affine(out G1Affine b, native);
+        G1Affine a = managed.ToAffine(); CurveNative.blst_p1_to_affine(out G1Affine b, native);
         ReadOnlySpan<G1Affine> aa = new(in a), bb = new(in b);
         Check(MemoryMarshal.AsBytes(aa).SequenceEqual(MemoryMarshal.AsBytes(bb)), message);
     }
     private static void TestG1()
     {
         G1Affine generator = G1Affine.Generator;
-        Check(Fp.AreEqual(generator.X, Native.blst_p1_affine_generator()->X) && Fp.AreEqual(generator.Y, Native.blst_p1_affine_generator()->Y), "G1 generator");
+        Check(Fp.AreEqual(generator.X, CurveNative.blst_p1_affine_generator()->X) && Fp.AreEqual(generator.Y, CurveNative.blst_p1_affine_generator()->Y), "G1 generator");
         G1Projective g = G1Projective.Generator, infinity = default;
         foreach (byte[] scalar in Edges)
         {
             fixed (byte* sp = scalar)
             {
-                G1Projective.Multiply(generator, scalar, out G1Projective actual); Native.blst_p1_mult(out G1Projective expected, g, sp, 256);
+                G1Projective.Multiply(generator, scalar, out G1Projective actual); CurveNative.blst_p1_mult(out G1Projective expected, g, sp, 256);
                 Equal(actual, expected, "G1 scalar edge");
             }
         }
         for (int i = 0; i < 2000; i++)
         {
             Fp u = i == 0 ? Fp.Zero : i == 1 ? Fp.One : RandomFp();
-            MapToCurve.MapToG1(u, out G1Projective point); Native.blst_map_to_g1(out G1Projective native, u, null);
+            MapToCurve.MapToG1(u, out G1Projective point); CurveNative.blst_map_to_g1(out G1Projective native, u, null);
             Equal(point, native, $"G1 map {i}");
             G1Affine affine = point.ToAffine();
-            Check(affine.IsOnCurve() && Native.blst_p1_affine_on_curve(affine) != 0, "G1 mapped on curve");
-            Check(affine.IsInSubgroup() && Native.blst_p1_affine_in_g1(affine) != 0, "G1 mapped subgroup");
+            Check(affine.IsOnCurve() && CurveNative.blst_p1_affine_on_curve(affine) != 0, "G1 mapped on curve");
+            Check(affine.IsInSubgroup() && CurveNative.blst_p1_affine_in_g1(affine) != 0, "G1 mapped subgroup");
             G1Affine bad = new(RandomFp(), RandomFp());
-            Check(bad.IsOnCurve() == (Native.blst_p1_affine_on_curve(bad) != 0), "G1 random on-curve check");
-            G1Projective.Add(point, g, out G1Projective sum); Native.blst_p1_add_or_double(out G1Projective nativeSum, point, g);
+            Check(bad.IsOnCurve() == (CurveNative.blst_p1_affine_on_curve(bad) != 0), "G1 random on-curve check");
+            G1Projective.Add(point, g, out G1Projective sum); CurveNative.blst_p1_add_or_double(out G1Projective nativeSum, point, g);
             Equal(sum, nativeSum, "G1 addition");
             G1Projective.AddAffine(point, generator, out sum); Equal(sum, nativeSum, "G1 mixed addition");
-            G1Projective.Double(point, out sum); Native.blst_p1_double(out nativeSum, point); Equal(sum, nativeSum, "G1 doubling");
+            G1Projective.Double(point, out sum); CurveNative.blst_p1_double(out nativeSum, point); Equal(sum, nativeSum, "G1 doubling");
             G1Projective.Add(point, point, out sum); Equal(sum, nativeSum, "G1 P+P");
             G1Projective.AddAffine(point, affine, out sum); Equal(sum, nativeSum, "G1 mixed P+P");
             G1Projective.Negate(point, out G1Projective neg); G1Projective.Add(point, neg, out sum); Check(sum.IsInfinity, "G1 P-P");
@@ -72,11 +71,11 @@ internal static unsafe partial class Program
             G1Projective.Add(point, infinity, out sum); Check(G1Projective.AreEqual(sum, point), "G1 P+infinity");
             G1Projective.AddAffine(point, default, out sum); Check(G1Projective.AreEqual(sum, point), "G1 P+affine infinity");
             G1Projective.AddAffine(infinity, affine, out sum); Check(G1Projective.AreEqual(sum, point), "G1 infinity+affine");
-            G1Projective alias = point; G1Projective.Add(alias, g, out alias); Native.blst_p1_add_or_double(out nativeSum, point, g); Equal(alias, nativeSum, "G1 aliased output");
+            G1Projective alias = point; G1Projective.Add(alias, g, out alias); CurveNative.blst_p1_add_or_double(out nativeSum, point, g); Equal(alias, nativeSum, "G1 aliased output");
             byte[] scalar = new byte[32]; Rng.NextBytes(scalar);
             fixed (byte* sp = scalar)
             {
-                G1Projective.Multiply(affine, scalar, out sum); Native.blst_p1_mult(out nativeSum, point, sp, 256);
+                G1Projective.Multiply(affine, scalar, out sum); CurveNative.blst_p1_mult(out nativeSum, point, sp, 256);
                 Equal(sum, nativeSum, "G1 multiplication");
             }
             Fp x = RandomFp(); Fp.Square(out Fp rhs, x); Fp.Multiply(out rhs, rhs, x);
@@ -84,7 +83,7 @@ internal static unsafe partial class Program
             if (Fp.Sqrt(out Fp y, rhs))
             {
                 G1Affine arbitrary = new(x, y); Check(arbitrary.IsOnCurve(), "G1 solved point on curve");
-                Check(arbitrary.IsInSubgroup() == (Native.blst_p1_affine_in_g1(arbitrary) != 0), "G1 arbitrary subgroup check");
+                Check(arbitrary.IsInSubgroup() == (CurveNative.blst_p1_affine_in_g1(arbitrary) != 0), "G1 arbitrary subgroup check");
             }
         }
         G1Affine zero = default; Check(zero.IsOnCurve() && zero.IsInSubgroup(), "G1 infinity predicates");
@@ -104,7 +103,7 @@ internal static unsafe partial class Program
                 if (round == 6) points[count / 2] = default;
                 if (round == 10) Array.Clear(points);
                 if (round == 11) Array.Clear(scalars);
-                G1Projective.MultiScalarMultiply(points, scalars, out G1Projective actual); Native.Msm(points, scalars, out G1Projective expected);
+                G1Projective.MultiScalarMultiply(points, scalars, out G1Projective actual); CurveNative.Msm(points, scalars, out G1Projective expected);
                 Equal(actual, expected, $"G1 MSM n={count}, round={round}");
             }
         }
@@ -125,43 +124,43 @@ internal static unsafe partial class Program
                 scalars[i * 32] = pattern == 0 ? (byte)1 : i % 2 == 0 ? (byte)1 : (byte)15;
             }
             G1Projective.MultiScalarMultiply(points, scalars, out G1Projective actual);
-            Native.Msm(points, scalars, out G1Projective expected);
+            CurveNative.Msm(points, scalars, out G1Projective expected);
             Equal(actual, expected, pattern == 0 ? "G1 batch bucket doubling" : "G1 batch bucket inverse and infinity");
         }
     }
     private static void Equal(in G2Projective managed, in G2Projective native, string message)
     {
-        G2Affine a = managed.ToAffine(); Native.blst_p2_to_affine(out G2Affine b, native);
+        G2Affine a = managed.ToAffine(); CurveNative.blst_p2_to_affine(out G2Affine b, native);
         ReadOnlySpan<G2Affine> aa = new(in a), bb = new(in b);
         Check(MemoryMarshal.AsBytes(aa).SequenceEqual(MemoryMarshal.AsBytes(bb)), message);
     }
     private static void TestG2()
     {
         G2Affine generator = G2Affine.Generator;
-        Check(Fp2.AreEqual(generator.X, Native.blst_p2_affine_generator()->X) && Fp2.AreEqual(generator.Y, Native.blst_p2_affine_generator()->Y), "G2 generator");
+        Check(Fp2.AreEqual(generator.X, CurveNative.blst_p2_affine_generator()->X) && Fp2.AreEqual(generator.Y, CurveNative.blst_p2_affine_generator()->Y), "G2 generator");
         G2Projective g = G2Projective.Generator, infinity = default;
         foreach (byte[] scalar in Edges)
         {
             fixed (byte* sp = scalar)
             {
-                G2Projective.Multiply(generator, scalar, out G2Projective actual); Native.blst_p2_mult(out G2Projective expected, g, sp, 256);
+                G2Projective.Multiply(generator, scalar, out G2Projective actual); CurveNative.blst_p2_mult(out G2Projective expected, g, sp, 256);
                 Equal(actual, expected, "G2 scalar edge");
             }
         }
         for (int i = 0; i < 2000; i++)
         {
             Fp2 u = i == 0 ? Fp2.Zero : i == 1 ? Fp2.One : RandomFp2();
-            MapToCurve.MapToG2(u, out G2Projective point); Native.blst_map_to_g2(out G2Projective native, u, null);
+            MapToCurve.MapToG2(u, out G2Projective point); CurveNative.blst_map_to_g2(out G2Projective native, u, null);
             Equal(point, native, $"G2 map {i}");
             G2Affine affine = point.ToAffine();
-            Check(affine.IsOnCurve() && Native.blst_p2_affine_on_curve(affine) != 0, "G2 mapped on curve");
-            Check(affine.IsInSubgroup() && Native.blst_p2_affine_in_g2(affine) != 0, "G2 mapped subgroup");
+            Check(affine.IsOnCurve() && CurveNative.blst_p2_affine_on_curve(affine) != 0, "G2 mapped on curve");
+            Check(affine.IsInSubgroup() && CurveNative.blst_p2_affine_in_g2(affine) != 0, "G2 mapped subgroup");
             G2Affine bad = new(RandomFp2(), RandomFp2());
-            Check(bad.IsOnCurve() == (Native.blst_p2_affine_on_curve(bad) != 0), "G2 random on-curve check");
-            G2Projective.Add(point, g, out G2Projective sum); Native.blst_p2_add_or_double(out G2Projective nativeSum, point, g);
+            Check(bad.IsOnCurve() == (CurveNative.blst_p2_affine_on_curve(bad) != 0), "G2 random on-curve check");
+            G2Projective.Add(point, g, out G2Projective sum); CurveNative.blst_p2_add_or_double(out G2Projective nativeSum, point, g);
             Equal(sum, nativeSum, "G2 addition");
             G2Projective.AddAffine(point, generator, out sum); Equal(sum, nativeSum, "G2 mixed addition");
-            G2Projective.Double(point, out sum); Native.blst_p2_double(out nativeSum, point); Equal(sum, nativeSum, "G2 doubling");
+            G2Projective.Double(point, out sum); CurveNative.blst_p2_double(out nativeSum, point); Equal(sum, nativeSum, "G2 doubling");
             G2Projective.Add(point, point, out sum); Equal(sum, nativeSum, "G2 P+P");
             G2Projective.AddAffine(point, affine, out sum); Equal(sum, nativeSum, "G2 mixed P+P");
             G2Projective.Negate(point, out G2Projective neg); G2Projective.Add(point, neg, out sum); Check(sum.IsInfinity, "G2 P-P");
@@ -170,11 +169,11 @@ internal static unsafe partial class Program
             G2Projective.Add(point, infinity, out sum); Check(G2Projective.AreEqual(sum, point), "G2 P+infinity");
             G2Projective.AddAffine(point, default, out sum); Check(G2Projective.AreEqual(sum, point), "G2 P+affine infinity");
             G2Projective.AddAffine(infinity, affine, out sum); Check(G2Projective.AreEqual(sum, point), "G2 infinity+affine");
-            G2Projective alias = point; G2Projective.Add(alias, g, out alias); Native.blst_p2_add_or_double(out nativeSum, point, g); Equal(alias, nativeSum, "G2 aliased output");
+            G2Projective alias = point; G2Projective.Add(alias, g, out alias); CurveNative.blst_p2_add_or_double(out nativeSum, point, g); Equal(alias, nativeSum, "G2 aliased output");
             byte[] scalar = new byte[32]; Rng.NextBytes(scalar);
             fixed (byte* sp = scalar)
             {
-                G2Projective.Multiply(affine, scalar, out sum); Native.blst_p2_mult(out nativeSum, point, sp, 256);
+                G2Projective.Multiply(affine, scalar, out sum); CurveNative.blst_p2_mult(out nativeSum, point, sp, 256);
                 Equal(sum, nativeSum, "G2 multiplication");
             }
             Fp2 x = RandomFp2(); Fp2.Square(out Fp2 rhs, x); Fp2.Multiply(out rhs, rhs, x);
@@ -182,7 +181,7 @@ internal static unsafe partial class Program
             if (FieldRoots.Sqrt(out Fp2 y, rhs))
             {
                 G2Affine arbitrary = new(x, y); Check(arbitrary.IsOnCurve(), "G2 solved point on curve");
-                Check(arbitrary.IsInSubgroup() == (Native.blst_p2_affine_in_g2(arbitrary) != 0), "G2 arbitrary subgroup check");
+                Check(arbitrary.IsInSubgroup() == (CurveNative.blst_p2_affine_in_g2(arbitrary) != 0), "G2 arbitrary subgroup check");
             }
         }
         G2Affine zero = default; Check(zero.IsOnCurve() && zero.IsInSubgroup(), "G2 infinity predicates");
@@ -202,7 +201,7 @@ internal static unsafe partial class Program
                 if (round == 6) points[count / 2] = default;
                 if (round == 10) Array.Clear(points);
                 if (round == 11) Array.Clear(scalars);
-                G2Projective.MultiScalarMultiply(points, scalars, out G2Projective actual); Native.Msm(points, scalars, out G2Projective expected);
+                G2Projective.MultiScalarMultiply(points, scalars, out G2Projective actual); CurveNative.Msm(points, scalars, out G2Projective expected);
                 Equal(actual, expected, $"G2 MSM n={count}, round={round}");
             }
         }
@@ -223,7 +222,7 @@ internal static unsafe partial class Program
                 scalars[i * 32] = pattern == 0 ? (byte)1 : i % 2 == 0 ? (byte)1 : (byte)15;
             }
             G2Projective.MultiScalarMultiply(points, scalars, out G2Projective actual);
-            Native.Msm(points, scalars, out G2Projective expected);
+            CurveNative.Msm(points, scalars, out G2Projective expected);
             Equal(actual, expected, pattern == 0 ? "G2 batch bucket doubling" : "G2 batch bucket inverse and infinity");
         }
     }
