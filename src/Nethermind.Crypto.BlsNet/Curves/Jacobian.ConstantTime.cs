@@ -73,8 +73,8 @@ public partial struct Jacobian<T> where T : struct, IField<T>
     }
 
     // Requires on-curve operands that are unequal unless both are infinity.
-    // In the G2 fixed -z chain, r = [k]p and gcd(k-1, #E2(Fp2)) = 1 at
-    // each addition. See CofactorScheduleTests and docs/design.md.
+    // Cofactor callers prove inequality from the full group order, including
+    // its torsion. See CofactorScheduleTests and docs/cofactor-schedule.md.
     internal static void AddDistinctConstantTime(out Jacobian<T> r, in Jacobian<T> p, in Jacobian<T> q)
     {
         CurveField<T>.Square(out T z1, p.Z); CurveField<T>.Square(out T z2, q.Z);
@@ -131,7 +131,10 @@ public partial struct Jacobian<T> where T : struct, IField<T>
 
     private static void AddAndDoubleConstantTime(ref Jacobian<T> r, in Jacobian<T> p, int count)
     {
-        if (typeof(T) == typeof(Fp2)) AddDistinctConstantTime(out r, r, p);
+        // G2's five gcds are one; G1's are [1, 11, 1, 1, 3]. The count
+        // identifies the public fixed-chain step, never a point value.
+        if (typeof(T) == typeof(Fp2) || typeof(T) == typeof(Fp) && count is 2 or 9 or 32)
+            AddDistinctConstantTime(out r, r, p);
         else AddConstantTime(out r, r, p);
         DoubleN(out r, r, count);
     }

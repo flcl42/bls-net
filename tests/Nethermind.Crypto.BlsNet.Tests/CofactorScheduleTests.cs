@@ -17,13 +17,44 @@ internal static unsafe partial class CurveTests
         BigInteger h2 = BigInteger.Parse("05d543a95414e7f1091d50792876a202cd91de4547085abaa68a205b2e5a7ddfa628f1cb4d9e82ef21537e293a6691ae1616ec6e786f0c70cf1c38e31c7238e5", NumberStyles.HexNumber);
         Check(h2 == (BigInteger.Pow(z, 8) - 4 * BigInteger.Pow(z, 7) + 5 * BigInteger.Pow(z, 6) - 4 * BigInteger.Pow(z, 4) + 6 * BigInteger.Pow(z, 3) - 4 * z * z - 4 * z + 13) / 9, "twist cofactor polynomial");
         BigInteger n2 = r * h2, t = z + 1, k = 2;
+        BigInteger n1 = h1 * r;
+        int step = 0;
         foreach (int doubles in new[] { 2, 3, 9, 32, 16 })
         {
             Check(BigInteger.GreatestCommonDivisor(k - 1, n2).IsOne, "G2 fixed-chain addition cannot double");
+            Check(BigInteger.GreatestCommonDivisor(k - 1, n1) == new[] { 1, 11, 1, 1, 3 }[step++], "G1 fixed-chain doubling exceptions");
             k = (k + 1) << doubles;
         }
         Check(k == -z, "fixed -z schedule");
         Check(BigInteger.GreatestCommonDivisor(-z - 1, h1 * r).IsOne && BigInteger.GreatestCommonDivisor(-z - 1, n2).IsOne, "1-z sum cannot double");
+        TestFullBasePoint(default, z, n1);
+        TestFullBasePoint(new Jacobian<Fp>(Fp.One, Fp.One, Fp.Zero), z, n1);
+        bool saw3 = false, saw11 = false;
+        for (int i = 0; i < 64; i++)
+        {
+            Fp x, y;
+            do
+            {
+                x = RandomFp(); Fp.Square(out Fp rhs, x); Fp.Multiply(out rhs, rhs, x);
+                Fp.Add(out rhs, rhs, Fp.FromUInt64(4));
+                if (Fp.Sqrt(out y, rhs)) break;
+            } while (true);
+            Jacobian<Fp> q = new(x, y, Fp.One);
+            TestFullBasePoint(q, z, n1);
+            foreach (int prime in new[] { 3, 11 })
+            {
+                BigInteger rest = n1;
+                while (rest % prime == 0) rest /= prime;
+                Jacobian<Fp> torsion = NaiveScale(q, rest);
+                if (torsion.IsInfinity) continue;
+                while (!NaiveScale(torsion, prime).IsInfinity) torsion = NaiveScale(torsion, prime);
+                TestFullBasePoint(torsion, z, n1);
+                BigInteger exceptionalK = prime == 11 ? 12 : BigInteger.Parse("0d20100000000", NumberStyles.HexNumber);
+                Check(Jacobian<Fp>.AreEqual(NaiveScale(torsion, exceptionalK), torsion), "G1 retained addition actually doubles on torsion");
+                if (prime == 3) saw3 = true; else saw11 = true;
+            }
+        }
+        Check(saw3 && saw11, "G1 cofactor tests cover 3- and 11-torsion");
         BigInteger Norm(BigInteger a, BigInteger b) => a * a + a * b * t + b * b * p;
         Check(BigInteger.GreatestCommonDivisor(Norm(1 - 2 * p, 2 * t), n2).IsOne, "first cofactor sum cannot double");
         Check(BigInteger.GreatestCommonDivisor(Norm(-2 * p - 1, 2 * t + 1), n2) == 13, "second cofactor sum retains doubling handling");
@@ -69,16 +100,29 @@ internal static unsafe partial class CurveTests
     }
 
     // Independent binary group law, valid on the full curve rather than just its prime subgroup.
-    private static Jacobian<Fp2> NaiveScale(Jacobian<Fp2> p, BigInteger scalar)
+    private static Jacobian<T> NaiveScale<T>(Jacobian<T> p, BigInteger scalar) where T : struct, IField<T>
     {
-        if (scalar.Sign < 0) { Jacobian<Fp2>.Negate(out p, p); scalar = -scalar; }
-        Jacobian<Fp2> result = default;
+        if (scalar.Sign < 0) { Jacobian<T>.Negate(out p, p); scalar = -scalar; }
+        Jacobian<T> result = default;
         while (scalar > 0)
         {
-            if (!scalar.IsEven) Jacobian<Fp2>.Add(out result, result, p);
-            Jacobian<Fp2>.Double(out p, p); scalar >>= 1;
+            if (!scalar.IsEven) Jacobian<T>.Add(out result, result, p);
+            Jacobian<T>.Double(out p, p); scalar >>= 1;
         }
         return result;
+    }
+
+    private static void TestFullBasePoint(Jacobian<Fp> q, BigInteger z, BigInteger n1)
+    {
+        Check(NaiveScale(q, n1).IsInfinity, "full base curve order");
+        Jacobian<Fp>.TimesMinusZConstantTime(out Jacobian<Fp> actual, q);
+        Check(Jacobian<Fp>.AreEqual(actual, NaiveScale(q, -z)), "fixed -z on full base curve");
+        Jacobian<Fp> alias = q; Jacobian<Fp>.TimesMinusZConstantTime(out alias, alias);
+        Check(Jacobian<Fp>.AreEqual(actual, alias), "G1 fixed -z point alias");
+        Jacobian<Fp>.TimesOneMinusZConstantTime(out actual, q);
+        Check(Jacobian<Fp>.AreEqual(actual, NaiveScale(q, 1 - z)), "cofactor on full base curve");
+        alias = q; Jacobian<Fp>.TimesOneMinusZConstantTime(out alias, alias);
+        Check(Jacobian<Fp>.AreEqual(actual, alias), "G1 cofactor point alias");
     }
 
     private static void TestFullTwistPoint(Jacobian<Fp2> q, BigInteger effective, BigInteger z, BigInteger p, BigInteger t, BigInteger n2)
