@@ -104,7 +104,7 @@ The original public-input bodies were preserved. The following before/after capt
 | Map G1 | 105.5 → 102.9 | 64.2 → 65.3 | 25.2 → 25.2 |
 | Map G2 | 285.0 → 279.9 | 224.5 → 222.4 | 84.9 → 85.0 |
 
-There is no consistent regression; the largest retained slowdown is about 2%. These best samples cannot establish improvements of a few percent. A first .NET 11 after-capture gave 67.87 ns Fp multiply, 230.9 µs G2 multiply and 300.8 µs G2 map. Native G2 timings rose in that interval too; repeating these three rows produced the values above. Both captures are retained. See [raw captures](validation/constant-time/) and [constant-time validation](constant-time-validation.md) for functional, generated-code and timing-leak evidence.
+There is no consistent regression; the largest retained slowdown is about 2%. These best samples cannot establish improvements of a few percent. A first .NET 11 after-capture gave 67.87 ns Fp multiply, 230.9 µs G2 multiply and 300.8 µs G2 map. Native G2 timings rose in that interval too; repeating these three rows produced the values above. Both captures are retained. See [constant-time validation](constant-time-validation.md) for functional, generated-code and timing-leak evidence.
 
 Reproduce with the existing runtime launch commands, selecting `--quick --filter 'CT '` for the new comparison. `--timing-leak --timing-samples 20000 --no-native` selects the separate statistical experiment; it is not part of the ordinary benchmark or test run.
 
