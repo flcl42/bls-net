@@ -1,0 +1,390 @@
+diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
+index 29a15e47..dfdbf5f9 100644
+--- a/src/coreclr/jit/lower.cpp
++++ b/src/coreclr/jit/lower.cpp
+@@ -14458,6 +14458,7 @@ bool Lowering::TryLowerMultiplyCarryRows()
+ 
+     struct Lane
+     {
++        bool recognized;
+         GenTree* product;
+         GenTree* productStore;
+         unsigned lowLocal;
+@@ -14664,8 +14665,7 @@ bool Lowering::TryLowerMultiplyCarryRows()
+     // Describe each lane: its two product halves and up to two (ADD, ADD_CARRY) pairs. The rewrite
+     // keeps the values of both halves, so they may have other readers; only the intermediates
+     // whose values change (the partial sum and the carried high words) need a single reader.
+-    for (Lane& lane : lanes)
+-    {
++    auto describeLane = [&](Lane& lane) -> bool {
+         lane.productStore = storeOf(lane.product);
+         if (lane.productStore == nullptr)
+         {
+@@ -14711,7 +14711,7 @@ bool Lowering::TryLowerMultiplyCarryRows()
+         if (highRead == nullptr)
+         {
+             // No accumulation: the halves are used as they are.
+-            continue;
++            return true;
+         }
+         lane.add[0] = lane.adc[0]->gtPrev;
+         if (!isFlagsAdd(lane.add[0]) || (pos(highRead) < pos(lane.productStore)))
+@@ -14753,7 +14753,7 @@ bool Lowering::TryLowerMultiplyCarryRows()
+                 JITDUMP("Rows: product [%06u] carry is not stored\n", lane.product->gtTreeID);
+                 return false;
+             }
+-            continue;
++            return true;
+         }
+         lane.add[1] = partialUse.User();
+         lane.adc[1] = high1Use.User();
+@@ -14766,17 +14766,33 @@ bool Lowering::TryLowerMultiplyCarryRows()
+             JITDUMP("Rows: product [%06u] carry is not stored\n", lane.product->gtTreeID);
+             return false;
+         }
++        return true;
++    };
++    for (Lane& lane : lanes)
++    {
++        lane.recognized = describeLane(lane);
+     }
+ 
+     bool changed = false;
+     for (size_t start = 0; start < lanes.size();)
+     {
++        // An unrelated product (such as a square's diagonal) must not prevent
++        // independent, fully matched rows elsewhere in the block from lowering.
++        if (!lanes[start].recognized)
++        {
++            start++;
++            continue;
++        }
+         // Extend the row while the next lane accumulates this lane's high word.
+         size_t end = start + 1;
+         for (; end < lanes.size(); end++)
+         {
+             Lane&    prev  = lanes[end - 1];
+             Lane&    lane  = lanes[end];
++            if (!lane.recognized)
++            {
++                break;
++            }
+             // A bare lane passes its raw high word, whose value the rewrite keeps.
+             GenTree* carry  = (prev.addCount == 0) ? nullptr : singleReader(prev.highOutStore);
+             unsigned addend = BAD_VAR_NUM;
+@@ -14946,6 +14962,41 @@ bool Lowering::TryLowerMultiplyCarryRows()
+                 break;
+             }
+         }
++        // The source multiplier can stay live for later rows or a diagonal.
++        // A row-local copy gives its consecutive fixed RDX uses an independent
++        // interval, preventing unrelated operands from repeatedly evicting it.
++        unsigned multiplierCopy = BAD_VAR_NUM;
++        bool multiplierLivesAfterRow = false;
++        if (multiplierLocal != BAD_VAR_NUM)
++        {
++            GenTreeHWIntrinsic* lastProduct = lanes[last].product->AsHWIntrinsic();
++            GenTree* lastRead = nullptr;
++            for (GenTree* operand : lastProduct->Operands())
++            {
++                if (operand->OperIs(GT_LCL_VAR) && operand->AsLclVar()->GetLclNum() == multiplierLocal &&
++                    ((lastRead == nullptr) || (pos(operand) > pos(lastRead))))
++                {
++                    lastRead = operand;
++                }
++            }
++            GenTree* next = nullptr;
++            multiplierLivesAfterRow = (lastRead != nullptr) && nextRef.Lookup(lastRead, &next) &&
++                                      next->OperIs(GT_LCL_VAR);
++        }
++        if (multiplierLivesAfterRow)
++        {
++            multiplierCopy = m_compiler->lvaGrabTemp(true DEBUGARG("ADX row multiplier"));
++            m_compiler->lvaGetDesc(multiplierCopy)->lvType = TYP_LONG;
++            GenTree* read = m_compiler->gtNewLclvNode(multiplierLocal, TYP_LONG);
++            GenTree* store = m_compiler->gtNewStoreLclVarNode(multiplierCopy, read);
++            GenTree* before = firstProduct->Op(1);
++            if (firstProduct->Op(2)->OperIs(GT_LCL_VAR) &&
++                firstProduct->Op(2)->AsLclVar()->GetLclNum() == multiplierLocal)
++            {
++                before = firstProduct->Op(2);
++            }
++            BlockRange().InsertBefore(before, read, store);
++        }
+         for (size_t i = first; i <= last; i++)
+         {
+             Lane& lane = lanes[i];
+@@ -14958,8 +15009,19 @@ bool Lowering::TryLowerMultiplyCarryRows()
+                 {
+                     std::swap(product->Op(1), product->Op(2));
+                 }
+-                product->Op(1)->ClearContained();
+-                product->Op(1)->ClearRegOptional();
++                if (multiplierCopy != BAD_VAR_NUM)
++                {
++                    GenTree* oldRead = product->Op(1);
++                    GenTree* rowRead = m_compiler->gtNewLclvNode(multiplierCopy, TYP_LONG);
++                    BlockRange().InsertBefore(oldRead, rowRead);
++                    product->Op(1) = rowRead;
++                    BlockRange().Remove(oldRead);
++                }
++                else
++                {
++                    product->Op(1)->ClearContained();
++                    product->Op(1)->ClearRegOptional();
++                }
+             }
+             if (lane.addCount == 0)
+             {
+@@ -15901,6 +15963,7 @@ bool Lowering::LowerFullAdders()
+         {
+             if (++nodeCount > 8192)
+             {
++                JITDUMP("Full adders: method exceeds node budget\n");
+                 return false;
+             }
+         }
+@@ -16086,6 +16149,7 @@ bool Lowering::LowerFullAdders()
+                 local = outputLocal;
+                 if (adders.size() == 128)
+                 {
++                    JITDUMP("Full adders: method exceeds candidate budget\n");
+                     return false;
+                 }
+                 adders.push_back(
+@@ -16390,16 +16454,21 @@ bool Lowering::IsCarryFlagsCrossing(GenTree* node)
+ //
+ void Lowering::LowerCarryChains()
+ {
+-    unsigned budget = 2048;
++    // Match the method-size allowance in LowerFullAdders.
++    unsigned budget = 8192;
+     for (BasicBlock* block : m_compiler->Blocks())
+     {
+         m_block = block;
+         for (GenTree* node = BlockRange().FirstNode(); node != nullptr;)
+         {
+-            if (budget-- == 0)
++            // The optional final-limb search is budgeted independently of
++            // forwarding already recognized carries below. A large block can
++            // exhaust this allowance before its first forwarding walk.
++            if (budget == 0)
+             {
+-                return;
++                break;
+             }
++            budget--;
+             GenTree* next = node->gtNext;
+             // Full-adder lowering creates SETCCs after the ordinary lowering
+             // walk. Let the last limb consume such a carry directly as well.
+diff --git a/src/tests/JIT/opt/Add/CarryForwardBudget.cs b/src/tests/JIT/opt/Add/CarryForwardBudget.cs
+new file mode 100644
+index 00000000..ad401846
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/CarryForwardBudget.cs
+@@ -0,0 +1,90 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++public class CarryForwardBudgetTests
++{
++    private readonly struct Words
++    {
++        public readonly ulong L0, L1, L2, L3, L4, L5;
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++        public Words(ulong a, ulong b, ulong c, ulong d, ulong e, ulong f)
++        { L0=a; L1=b; L2=c; L3=d; L4=e; L5=f; }
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Add(ulong a, ulong b, ref ulong carry)
++    {
++        ulong s = a + b, c = s < a ? 1UL : 0UL;
++        ulong r = s + carry; carry = c + (r < s ? 1UL : 0UL); return r;
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static void AddMod(out Words result, in Words a, in Words b)
++    {
++        ulong carry = 0;
++        ulong r0 = Add(a.L0, b.L0, ref carry);
++        ulong r1 = Add(a.L1, b.L1, ref carry);
++        ulong r2 = Add(a.L2, b.L2, ref carry);
++        ulong r3 = Add(a.L3, b.L3, ref carry);
++        ulong r4 = Add(a.L4, b.L4, ref carry);
++        ulong r5 = Add(a.L5, b.L5, ref carry);
++        ulong s0 = r0 + 0x4601000000005555UL;
++        carry = s0 < r0 ? 1UL : 0UL;
++        ulong s1 = Add(r1, 0xe15400014eac0000UL, ref carry);
++        ulong s2 = Add(r2, 0x98cf2d5f094f09dbUL, ref carry);
++        ulong s3 = Add(r3, 0x9b88b47b0c7aed40UL, ref carry);
++        ulong s4 = Add(r4, 0xb4e45849bcb45328UL, ref carry);
++        ulong s5 = Add(r5, 0xe5feee15c6801965UL, ref carry);
++        ulong mask = 0 - carry;
++        result = new Words(r0 ^ ((r0 ^ s0) & mask), r1 ^ ((r1 ^ s1) & mask), r2 ^ ((r2 ^ s2) & mask), r3 ^ ((r3 ^ s3) & mask), r4 ^ ((r4 ^ s4) & mask), r5 ^ ((r5 ^ s5) & mask));
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static Words LargeBlock(in Words a, in Words b)
++    {
++        Words result = a;
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        AddMod(out result, result, b);
++        return result;
++    }
++
++    [Fact]
++    public static void TestEntryPoint()
++    {
++        var random = new Random(134040);
++        BigInteger modulus = BigInteger.Parse("01a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab", System.Globalization.NumberStyles.HexNumber);
++        BigInteger mask = (BigInteger.One << 64) - 1;
++        Words Encode(BigInteger x) => new Words((ulong)(x & mask), (ulong)((x >> 64) & mask), (ulong)((x >> 128) & mask),
++            (ulong)((x >> 192) & mask), (ulong)((x >> 256) & mask), (ulong)((x >> 320) & mask));
++        byte[] bytes = new byte[48];
++        for (int test = 0; test < 10000; test++)
++        {
++            random.NextBytes(bytes); BigInteger x = new BigInteger(bytes, isUnsigned: true) % modulus;
++            random.NextBytes(bytes); BigInteger y = new BigInteger(bytes, isUnsigned: true) % modulus;
++            if ((test & 7) == 0) x = y = modulus - 1;
++            if ((test & 7) == 1) x = y = 0;
++            Words a = Encode(x), b = Encode(y); int rounds = test % 4;
++            Words actual = a;
++            for (int round = 0; round < rounds; round++) actual = LargeBlock(actual, b);
++            Words expected = Encode((x + 12 * rounds * y) % modulus);
++            if (actual.L0 != expected.L0 || actual.L1 != expected.L1 || actual.L2 != expected.L2 ||
++                actual.L3 != expected.L3 || actual.L4 != expected.L4 || actual.L5 != expected.L5)
++                throw new Exception("large modular block mismatch");
++        }
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/CarryForwardBudget.csproj b/src/tests/JIT/opt/Add/CarryForwardBudget.csproj
+new file mode 100644
+index 00000000..8b738d6f
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/CarryForwardBudget.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="CarryForwardBudget.cs" />
++    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
++    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
++  </ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/MixedCarryRows.cs b/src/tests/JIT/opt/Add/MixedCarryRows.cs
+new file mode 100644
+index 00000000..13bc1b60
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/MixedCarryRows.cs
+@@ -0,0 +1,73 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++// Valid rows on either side of a product whose high word consumes an unrelated
++// carry. That product must remain intact and must not disable the other rows.
++public class MixedCarryRowsTests
++{
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong MulAdd(ulong m, ulong x, ulong t, ulong c, out ulong lo)
++    {
++        ulong hi = Math.BigMul(m, x, out ulong l);
++        l += t; hi += l < t ? 1UL : 0UL;
++        l += c; hi += l < c ? 1UL : 0UL;
++        lo = l; return hi;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static void Mixed(ulong[] a, ulong m, ulong[] output, out ulong mix)
++    {
++        ulong a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3], a4 = a[4], a5 = a[5];
++        ulong r0 = a[6], r1 = a[7], r2 = a[8], r3 = a[9], r4 = a[10], r5 = a[11];
++        ulong c = MulAdd(m, a0, r0, 0, out r0);
++        c = MulAdd(m, a1, r1, c, out r1);
++        c = MulAdd(m, a2, r2, c, out r2);
++        c = MulAdd(m, a3, r3, c, out r3);
++        c = MulAdd(m, a4, r4, c, out r4);
++        c = MulAdd(m, a5, r5, c, out r5);
++        ulong firstCarry = c;
++        ulong diagonalHigh = Math.BigMul(a0, a0, out ulong diagonalLow);
++        ulong sum = r0 + r1;
++        diagonalHigh += sum < r0 ? 1UL : 0UL;
++        c = MulAdd(m, a5, r0, 0, out r0);
++        c = MulAdd(m, a4, r1, c, out r1);
++        c = MulAdd(m, a3, r2, c, out r2);
++        c = MulAdd(m, a2, r3, c, out r3);
++        c = MulAdd(m, a1, r4, c, out r4);
++        c = MulAdd(m, a0, r5, c, out r5);
++        // Drain both high words before the bounds check on output. This also
++        // makes the common multiplier live after both rows in the same block.
++        mix = firstCarry ^ c ^ diagonalLow ^ diagonalHigh ^ a0 ^ a1 ^ a2 ^ a3 ^ a4 ^ a5 ^ m;
++        output[0] = r0; output[1] = r1; output[2] = r2; output[3] = r3; output[4] = r4; output[5] = r5;
++    }
++
++    [Fact]
++    public static void TestEntryPoint()
++    {
++        var random = new Random(134039);
++        BigInteger w = BigInteger.One << 64, mask = w - 1, r = BigInteger.One << 384;
++        ulong Next() => random.Next(4) switch { 0 => 0, 1 => ulong.MaxValue, _ => (ulong)random.NextInt64() * 3 + 1 };
++        for (int test = 0; test < 20000; test++)
++        {
++            ulong[] a = { Next(), Next(), Next(), Next(), Next(), Next(), Next(), Next(), Next(), Next(), Next(), Next() };
++            ulong m = Next(); ulong[] output = new ulong[6]; Mixed(a, m, output, out ulong mix);
++            BigInteger x = 0, y = 0, t = 0;
++            for (int i = 5; i >= 0; i--) { x = x * w + a[i]; y = y * w + a[5 - i]; t = t * w + a[6 + i]; }
++            BigInteger first = t + x * m;
++            BigInteger lowSum = (first & mask) + ((first >> 64) & mask);
++            BigInteger square = (BigInteger)a[0] * a[0];
++            BigInteger second = first % r + y * m;
++            for (int i = 0; i < 6; i++)
++                if (output[i] != (ulong)((second >> (64 * i)) & mask)) throw new Exception("mixed row limb");
++            ulong expected = (ulong)(first / r) ^ (ulong)(second / r) ^ (ulong)(square & mask) ^
++                (ulong)(((square >> 64) + lowSum / w) & mask) ^ m;
++            for (int i = 0; i < 6; i++) expected ^= a[i];
++            if (mix != expected) throw new Exception("mixed product or carry");
++        }
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/MixedCarryRows.csproj b/src/tests/JIT/opt/Add/MixedCarryRows.csproj
+new file mode 100644
+index 00000000..b87b98a6
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/MixedCarryRows.csproj
+@@ -0,0 +1,12 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="MixedCarryRows.cs" />
++    <CLRTestEnvironmentVariable Include="DOTNET_TieredCompilation" Value="0" />
++    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
++  </ItemGroup>
++</Project>

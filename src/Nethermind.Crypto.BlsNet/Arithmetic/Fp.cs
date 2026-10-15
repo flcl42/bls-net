@@ -39,6 +39,7 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
         0x1a0111ea397fe69aUL,
     ];
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Fp(ulong l0, ulong l1, ulong l2, ulong l3, ulong l4, ulong l5)
     {
         _l0 = l0;

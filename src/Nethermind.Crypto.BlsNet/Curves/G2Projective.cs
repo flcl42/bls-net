@@ -44,6 +44,13 @@ public partial struct G2Projective
     /// <summary>MSM with consecutive 32-byte little-endian scalars; variable-time. Points must be in G2.</summary>
     public static void MultiScalarMultiply(ReadOnlySpan<G2Affine> points, ReadOnlySpan<byte> scalars, out G2Projective r)
         => MultiScalarMultiplication.MultiScalarMultiply(points, scalars, out r);
+    // psi^2 scales X by beta and negates Y; conjugations cancel, leaving Z.
+    internal static void PsiSquared(out Jacobian<Fp2> r, in Jacobian<Fp2> p)
+    {
+        Fp2.MultiplyByFp(out Fp2 x, p.X, CurveConstants.Beta);
+        Fp2.Negate(out Fp2 y, p.Y); r = new(x, y, p.Z);
+    }
+
     internal static void Psi(out Jacobian<Fp2> r, in Jacobian<Fp2> p)
     {
         Fp.MultiplyComposite(out Fp x0, p.X.C1, CurveConstants.frobenius_x.C1);

@@ -1,4 +1,5 @@
 // Secret-input SSWU ported from blst map_to_g2.c (Apache-2.0).
+using System.Runtime.CompilerServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 using Nethermind.Crypto.BlsNet.Curves;
 using static Nethermind.Crypto.BlsNet.Hashing.MapConstants2;
@@ -27,13 +28,26 @@ public static partial class MapToG2
         Fp2.Multiply(out x, x, xd); Fp2.Multiply(out y, y, gxd);
         Jacobian<Fp2> p = new(x, y, xd);
         Isogeny<Fp2>.Apply(out p, p, x_num, x_den, y_num, y_den);
+        ClearCofactorConstantTime(out p, p);
+        r = new G2Projective(p);
+    }
+
+    // On-curve twist points, including the complete cofactor group and infinity.
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void ClearCofactorConstantTime(out Jacobian<Fp2> r, in Jacobian<Fp2> p)
+    {
+        // The first and last additions, and the addition of -psi(P) to
+        // [1-z]P, cannot double a nonzero point. The endomorphism norms are
+        // coprime to #E2(Fp2); the second addition can double 13-torsion.
         Jacobian<Fp2>.Double(out Jacobian<Fp2> result, p);
-        G2Projective.Psi(out result, result); G2Projective.Psi(out result, result);
+        G2Projective.PsiSquared(out result, result);
         Jacobian<Fp2>.Negate(out Jacobian<Fp2> t0, p); G2Projective.Psi(out Jacobian<Fp2> t1, t0);
-        Jacobian<Fp2>.AddConstantTime(out result, result, t0); Jacobian<Fp2>.AddConstantTime(out result, result, t1);
-        Jacobian<Fp2>.TimesMinusZConstantTime(out t0, p); Jacobian<Fp2>.AddConstantTime(out t0, t0, p);
-        Jacobian<Fp2>.AddConstantTime(out t0, t0, t1); Jacobian<Fp2>.TimesMinusZConstantTime(out t1, t0);
+        Jacobian<Fp2>.AddDistinctConstantTime(out result, result, t0);
         Jacobian<Fp2>.AddConstantTime(out result, result, t1);
-        r = new G2Projective(result);
+        Jacobian<Fp2>.TimesOneMinusZConstantTime(out t0, p);
+        Jacobian<Fp2>.AddDistinctConstantTime(out t0, t0, t1);
+        Jacobian<Fp2>.TimesMinusZConstantTime(out t1, t0);
+        Jacobian<Fp2>.AddDistinctConstantTime(out result, result, t1);
+        r = result;
     }
 }

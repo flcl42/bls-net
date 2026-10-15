@@ -32,7 +32,7 @@ public static partial class MapToG2
         Jacobian<Fp2> p = new(x, y, xd);
         Isogeny<Fp2>.Apply(out p, p, x_num, x_den, y_num, y_den);
         Jacobian<Fp2>.Double(out Jacobian<Fp2> result, p);
-        G2Projective.Psi(out result, result); G2Projective.Psi(out result, result);
+        G2Projective.PsiSquared(out result, result);
         Jacobian<Fp2>.Negate(out Jacobian<Fp2> t0, p); G2Projective.Psi(out Jacobian<Fp2> t1, t0);
         Jacobian<Fp2>.Add(out result, result, t0); Jacobian<Fp2>.Add(out result, result, t1);
         Jacobian<Fp2>.TimesMinusZ(out t0, p); Jacobian<Fp2>.Add(out t0, t0, p);

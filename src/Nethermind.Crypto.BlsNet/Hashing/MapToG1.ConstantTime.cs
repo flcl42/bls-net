@@ -29,7 +29,7 @@ public static partial class MapToG1
         CurveField<Fp>.Multiply(out x, x, xd); CurveField<Fp>.Multiply(out y, y, gxd);
         Jacobian<Fp> p = new(x, y, xd);
         Isogeny<Fp>.Apply(out p, p, x_num, x_den, y_num, y_den);
-        Jacobian<Fp>.TimesMinusZConstantTime(out Jacobian<Fp> result, p); Jacobian<Fp>.AddConstantTime(out result, result, p);
+        Jacobian<Fp>.TimesOneMinusZConstantTime(out Jacobian<Fp> result, p);
         r = new G1Projective(result);
     }
 }

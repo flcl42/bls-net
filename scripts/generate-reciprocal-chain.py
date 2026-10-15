@@ -13,8 +13,7 @@ for line in source.splitlines():
         args = ['result' if arg == 'out' else arg for arg in args]
         if op == 'sqr_n_mul':
             dst, src, count, factor = args
-            lines.append(f'        for (int i = 0; i < {count}; i++) CurveField<Fp>.Square(out {src}, {src});')
-            lines.append(f'        Fp.MultiplyComposite(out {dst}, {src}, {factor});')
+            lines.append(f'        Fp.SquareNThenMultiply(out {dst}, {src}, {count}, {factor});')
         elif op == 'sqr':
             lines.append(f'        CurveField<Fp>.Square(out {args[0]}, {args[1]});')
         else:

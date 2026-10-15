@@ -72,6 +72,21 @@ public partial struct Jacobian<T> where T : struct, IField<T>
         Select(out sum, p, sum, InfinityMask(q)); Select(out r, q, sum, InfinityMask(p));
     }
 
+    // Requires on-curve operands that are unequal unless both are infinity.
+    // In the G2 fixed -z chain, r = [k]p and gcd(k-1, #E2(Fp2)) = 1 at
+    // each addition. See CofactorScheduleTests and docs/design.md.
+    internal static void AddDistinctConstantTime(out Jacobian<T> r, in Jacobian<T> p, in Jacobian<T> q)
+    {
+        CurveField<T>.Square(out T z1, p.Z); CurveField<T>.Square(out T z2, q.Z);
+        CurveField<T>.Multiply(out T u1, p.X, z2); CurveField<T>.Multiply(out T u2, q.X, z1);
+        CurveField<T>.Multiply(out z2, z2, q.Z); CurveField<T>.Multiply(out z1, z1, p.Z);
+        CurveField<T>.Multiply(out T s1, p.Y, z2); CurveField<T>.Multiply(out T s2, q.Y, z1);
+        CurveField<T>.Subtract(out T h, u2, u1); CurveField<T>.Subtract(out T v, s2, s1);
+        CurveField<T>.Multiply(out T z, p.Z, q.Z); CurveField<T>.Multiply(out z, z, h);
+        FinishAdd(out Jacobian<T> sum, u1, s1, h, v, z);
+        Select(out sum, p, sum, InfinityMask(q)); Select(out r, q, sum, InfinityMask(p));
+    }
+
     internal static void AddAffineConstantTime(out Jacobian<T> r, in Jacobian<T> p, in T qx, in T qy)
     {
         // Mixed dadd from ec_ops.h; doubling uses the affine operand to avoid Z rescaling.
@@ -97,6 +112,15 @@ public partial struct Jacobian<T> where T : struct, IField<T>
         Select(out sum, p, sum, InfinityMask(q)); Select(out r, q, sum, InfinityMask(p));
     }
 
+    // Both base and twist group orders are coprime to -z-1, so [-z]p != p
+    // for every non-infinity point. The fixed map cofactor uses this sum.
+    internal static void TimesOneMinusZConstantTime(out Jacobian<T> r, in Jacobian<T> p)
+    {
+        Jacobian<T> source = p;
+        TimesMinusZConstantTime(out r, source);
+        AddDistinctConstantTime(out r, r, source);
+    }
+
     internal static void TimesMinusZConstantTime(out Jacobian<T> r, in Jacobian<T> p)
     {
         Jacobian<T> source = p; Double(out r, source);
@@ -106,5 +130,9 @@ public partial struct Jacobian<T> where T : struct, IField<T>
     }
 
     private static void AddAndDoubleConstantTime(ref Jacobian<T> r, in Jacobian<T> p, int count)
-    { AddConstantTime(out r, r, p); for (int i = 0; i < count; i++) Double(out r, r); }
+    {
+        if (typeof(T) == typeof(Fp2)) AddDistinctConstantTime(out r, r, p);
+        else AddConstantTime(out r, r, p);
+        DoubleN(out r, r, count);
+    }
 }

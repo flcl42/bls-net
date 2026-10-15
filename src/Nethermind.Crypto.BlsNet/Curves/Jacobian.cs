@@ -131,7 +131,7 @@ public partial struct Jacobian<T> where T : struct, IField<T>
     private static void AddAndDouble(ref Jacobian<T> r, in Jacobian<T> p, int n)
     {
         if (T.AreEqual(p.Z, T.One)) AddAffine(out r, r, p.X, p.Y); else Add(out r, r, p);
-        for (int i = 0; i < n; i++) Double(out r, r);
+        DoubleN(out r, r, n);
     }
 
     internal static void BatchToAffine(Span<Jacobian<T>> points, Span<T> products)

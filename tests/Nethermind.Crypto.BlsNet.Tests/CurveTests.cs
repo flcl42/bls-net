@@ -26,6 +26,7 @@ internal static unsafe partial class CurveTests
     {
         NativeAvailable = nativeAvailable;
         if (NativeAvailable) { TestG1(); TestG2(); }
+        TestDoubleRuns(); CofactorScheduleTests();
         TestArguments(); TestPropertiesAndAllocations();
         Console.WriteLine($"Curves/maps/MSM: {checks:N0} checks, deterministic seed 0x2537.");
         return checks;

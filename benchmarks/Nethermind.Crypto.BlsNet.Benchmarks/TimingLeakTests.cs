@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using Nethermind.Crypto.BlsNet.Curves;
+using Nethermind.Crypto.BlsNet.Arithmetic;
+using Nethermind.Crypto.BlsNet.Hashing;
 
 // Deliberately opt-in: randomized fixed-vs-random experiment, not a stable CI assertion.
 internal static class TimingLeakTests
@@ -23,27 +25,53 @@ internal static class TimingLeakTests
         foreach (string fixedClass in new[] { "zero", "one", "low-weight" })
         {
             controlsPass &= Measure("G1 variable", fixedClass, samples, s => G1Projective.Multiply(p, s, out _), true);
-            Measure("G1 constant", fixedClass, samples, s => G1Projective.MultiplyConstantTime(p, s, out _), false);
+            if (BenchmarkOptions.Matches("CT G1 multiply")) Measure("G1 constant", fixedClass, samples, s => G1Projective.MultiplyConstantTime(p, s, out _), false);
             controlsPass &= Measure("G2 variable", fixedClass, samples, s => G2Projective.Multiply(q, s, out _), true);
-            Measure("G2 constant", fixedClass, samples, s => G2Projective.MultiplyConstantTime(q, s, out _), false);
+            if (BenchmarkOptions.Matches("CT G2 multiply")) Measure("G2 constant", fixedClass, samples, s => G2Projective.MultiplyConstantTime(q, s, out _), false);
+            if (BenchmarkOptions.Matches("CT Fp inverse"))
+                Measure("Fp inverse constant", fixedClass, samples, FieldInput, a => Fp.InverseConstantTime(out _, a), false, 48);
+            if (BenchmarkOptions.Matches("CT Fp2 inverse"))
+                Measure("Fp2 inverse constant", fixedClass, samples,
+                    bytes => new Fp2(FieldInput(bytes.AsSpan(0, 48).ToArray()), FieldInput(bytes.AsSpan(48).ToArray())),
+                    a => Fp2.InverseConstantTime(out _, a), false, 96);
+            if (BenchmarkOptions.Matches("CT map G1"))
+                Measure("map G1 constant", fixedClass, samples, FieldInput, a => MapToCurve.MapToG1ConstantTime(a, out _), false, 48);
+            if (BenchmarkOptions.Matches("CT map G2"))
+                Measure("map G2 constant", fixedClass, samples,
+                    bytes => new Fp2(FieldInput(bytes.AsSpan(0, 48).ToArray()), FieldInput(bytes.AsSpan(48).ToArray())),
+                    a => MapToCurve.MapToG2ConstantTime(a, out _), false, 96);
         }
         if (!controlsPass) throw new InvalidOperationException("Timing positive control did not detect leakage; the experiment is inconclusive. Increase samples or reduce host noise.");
     }
 
     private static bool Measure(string name, string fixedClass, int count, Action<byte[]> action, bool control)
+        => Measure(name, fixedClass, count, bytes => bytes, action, control, 32);
+
+    // Convert before timing, so parsing, canonicalization and allocation cannot affect a class.
+    private static Fp FieldInput(byte[] bytes)
+    {
+        // A fixed-size random subset [0,2^380) of the field; Montgomery values still
+        // exercise all six limbs. The three fixed classes also use this conversion.
+        bytes[^1] &= 0x0f;
+        if (!Fp.TryFromLittleEndian(bytes, out Fp field)) throw new InvalidOperationException();
+        return field;
+    }
+
+    private static bool Measure<T>(string name, string fixedClass, int count, Func<byte[], T> prepare, Action<T> action, bool control, int byteCount)
     {
         Random random = new(0x4354);
-        byte[] fixedScalar = new byte[32];
+        byte[] fixedScalar = new byte[byteCount];
         if (fixedClass == "one") fixedScalar[0] = 1;
         if (fixedClass == "low-weight") { fixedScalar[0] = 1; fixedScalar[15] = 1; fixedScalar[31] = 0x40; }
-        byte[][] inputs = new byte[count * 2][];
+        T[] inputs = new T[count * 2];
         bool[] classes = new bool[inputs.Length];
         for (int i = 0; i < inputs.Length; i++)
         {
             classes[i] = i < count;
             // Both classes own distinct buffers, preventing class-correlated cache reuse.
-            inputs[i] = new byte[32];
-            if (i < count) fixedScalar.CopyTo(inputs[i], 0); else random.NextBytes(inputs[i]);
+            byte[] bytes = new byte[byteCount];
+            if (i < count) fixedScalar.CopyTo(bytes, 0); else random.NextBytes(bytes);
+            inputs[i] = prepare(bytes);
         }
         for (int i = inputs.Length - 1; i > 0; i--)
         {
@@ -55,7 +83,7 @@ internal static class TimingLeakTests
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
         for (int i = 0; i < inputs.Length; i++)
         {
-            byte[] input = inputs[i];
+            T input = inputs[i];
             long start = Stopwatch.GetTimestamp(); action(input); long end = Stopwatch.GetTimestamp();
             times[i] = (end - start) * (1e9 / Stopwatch.Frequency);
         }
@@ -65,8 +93,8 @@ internal static class TimingLeakTests
         double cutoff = sorted[(int)(sorted.Length * 0.99)];
         for (int i = 0; i < times.Length; i++)
         { int c = classes[i] ? 0 : 1; stats[c].Add(times[i]); if (times[i] <= cutoff) trimmed[c].Add(times[i]); }
-        static double T(Moments[] s) => (s[0].Mean - s[1].Mean) / Math.Sqrt(s[0].Variance / s[0].Count + s[1].Variance / s[1].Count);
-        double t = T(stats), tt = T(trimmed);
+        static double Statistic(Moments[] s) => (s[0].Mean - s[1].Mean) / Math.Sqrt(s[0].Variance / s[0].Count + s[1].Variance / s[1].Count);
+        double t = Statistic(stats), tt = Statistic(trimmed);
         bool detected = Math.Abs(t) > 4.5 || Math.Abs(tt) > 4.5;
         Console.WriteLine($"{name},{fixedClass},{stats[0].Count},{stats[1].Count},{stats[0].Mean:F1},{stats[1].Mean:F1},{t:F3},{tt:F3},{(control ? detected.ToString() : "n/a")}");
         return detected;

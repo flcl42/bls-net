@@ -40,6 +40,7 @@ internal static unsafe partial class TowerTests
     {
         RInverse = BigInteger.ModPow(R % P, P - 2, P);
         Check(sizeof(FpWide) == 96 && sizeof(Fp2Wide) == 192 && sizeof(Fp6Wide) == 576, "wide layouts");
+        SquareRunTests();
         BigInteger wideBound = 22 * P * P;
         Check(9 * P * P < P * R && wideBound < 3 * P * R && 4 * P < R / 2, "reduction bounds");
         BigInteger[] edges = [0, 1, -1, P * P, -P * P, P * R - 1, -P * R + 1,

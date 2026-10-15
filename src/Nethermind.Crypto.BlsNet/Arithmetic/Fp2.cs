@@ -150,12 +150,13 @@ public partial struct Fp2 : IEquatable<Fp2>, IField<Fp2>
     private static void SquareExpanded(out Fp2 result, in Fp2 value)
     {
         Fp.AddUnreduced(out Fp sum, value.C0, value.C1);
-        Fp.SubtractComposite(out Fp difference, value.C0, value.C1);
+        Fp.SubtractBiased(out Fp difference, value.C0, value.C1);
         Fp.AddUnreduced(out Fp twice0, value.C0, value.C0);
-        // Inline one CIOS kernel, saving a call within the carry-analysis budget.
-        // Stock .NET 10 spills this method; compact mode keeps both isolated calls.
+        // Keep both CIOS products in this kernel. The biased difference and sum
+        // lie in [0,2p), so their product is below 4p^2 < pR.
+        // Compact mode retains its smaller call boundaries for stock runtimes.
         Fp.Multiply(out Fp c1, twice0, value.C1);
-        Fp.MultiplyComposite(out result.C0, sum, difference);
+        Fp.Multiply(out result.C0, sum, difference);
         result.C1 = c1;
     }
 
