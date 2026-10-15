@@ -2,7 +2,7 @@
 
 Pure C# BLS12-381 for .NET 10 and .NET 11, without native runtime dependencies: field arithmetic, G1/G2 operations, MSM, map-to-curve and pairing checks for EIP-2537 integration.
 
-Development status: implemented and covered by reference, algebraic, alias/allocation and optional native differential tests. Release packaging and broader platform validation remain open. APIs are variable-time and intended for public inputs. Scalar multiplication and MSM require subgroup points; check the curve before checking the subgroup. Pairing callers must validate both. Secret-key support, BLS signatures, message hash-to-curve with DST, and compressed/uncompressed point encodings remain open. See [design](docs/design.md) and [roadmap](docs/roadmap.md).
+Development status: implemented and covered by reference, algebraic, alias/allocation and optional native differential tests. Release packaging and broader platform validation remain open. Original APIs are variable-time for public inputs. Explicit constant-time field inversion, scalar multiplication, point helpers and maps are available; see [contracts and limits](docs/design.md#constant-time-apis) and the [runtime audit](docs/constant-time-validation.md). Scalar multiplication and MSM require subgroup points; check the curve before checking the subgroup. Pairing callers must validate both. Complete secret-key support, BLS signatures, message hash-to-curve with DST, and compressed/uncompressed point encodings remain open. See [design](docs/design.md) and [roadmap](docs/roadmap.md).
 
 ## Usage
 
@@ -52,7 +52,7 @@ dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release -p:BlsNetTe
 dotnet pack src/Nethermind.Crypto.BlsNet -c Release -o artifacts/packages
 ```
 
-Arithmetic, kernels, tower/pairing and curves/maps/MSM run together and report check counts. Native comparisons print `SKIP` when blst is absent; `--no-native` explicitly selects managed checks. Cold-call and policy diagnostics are available as `--kernel-cold-start`, `--square-cold-start` and `--kernel-policy` in separate processes.
+Arithmetic, kernels, tower/pairing, curves/maps/MSM and constant-time functional checks run together and report check counts. `--constant-time-only` selects just the new functional checks. Native comparisons print `SKIP` when blst is absent; `--no-native` explicitly selects managed checks. Cold-call and policy diagnostics are available as `--kernel-cold-start`, `--square-cold-start` and `--kernel-policy` in separate processes.
 
 To add the optional native reference on Windows x64:
 
@@ -72,6 +72,8 @@ dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release -
 ```
 
 One CLI covers fields, tower/pairing, curves/maps/MSM and the dependent Fr/Fp mul+add loops. `--filter` matches case-insensitive substrings separated by `|`; `--quick` shortens rounds and the default MSM sweep. Kernel policy switches and `--no-native` work here too. Set `BLST_BENCH_PROCESSOR` to pin a logical processor and disable tiering with `DOTNET_TieredCompilation=0` for measurements. Benchmarks also accept `-p:BlsNetTestTargetFramework=net10.0`.
+
+`--filter 'CT '` measures constant-time / variable-time / blst side by side. The slow timing-leak experiment is opt-in with `--timing-leak --timing-samples 20000`; it includes variable-time multiplication as a required positive control. See [validation](docs/constant-time-validation.md) for its method and interpretation.
 
 The retained EIP-2537 results use Nethermind's BenchmarkDotNet in-process Short job on a Ryzen 9 9950X3D VM, Windows 11. Native is Nethermind.Crypto.Bls 0.3.17.15; managed is compiled for net10.0. Stock is .NET 10.0.12. Fast results use the carry-aware lowering now included in [dotnet/runtime PR #134039](https://github.com/dotnet/runtime/pull/134039), head `0a303c9` or later.
 

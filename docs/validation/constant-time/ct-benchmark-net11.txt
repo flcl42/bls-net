@@ -1,0 +1,15 @@
+.NET 11.0.0-rc.1.26425.128
+Field kernels: expanded; short rounds.
+secret_operation,constant_time_us,variable_time_us,blst_us
+CT Fp inverse,23.269,1.771,1.358
+CT Fp2 inverse,23.133,1.994,1.432
+CT Fr inverse,7.907,NaN,0.777
+CT G1 multiply,130.670,96.409,47.310
+CT G2 multiply,276.906,176.733,97.781
+CT G1 to-affine,23.362,1.938,1.432
+CT G2 to-affine,24.028,2.557,1.682
+CT map G1,66.214,64.882,23.584
+CT map G2,238.597,237.385,85.352
+Operation | managed ns | blst ns | managed bytes
+Operation | managed ns | native ns | managed bytes
+operation,managed_us,blst_us

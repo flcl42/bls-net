@@ -72,6 +72,42 @@ These retained component captures (2026-10-13) use blst `f62244ef50ad1a603decdb8
 | G1 MSM 128 | 7227.500 | 1659.600 | 3857.500 | 1648.500 | 1525.400 | 1645.300 |
 | G2 MSM 128 | 12502.700 | 4717.500 | 6882.700 | 4719.000 | 2951.200 | 4734.800 |
 
+## Constant-time components
+
+Capture: 2026-10-15, Ryzen 9 9950X3D, Windows x64, logical processor 3, tiering disabled. Stock hosts are .NET 10.0.12 (net10.0, compact) and .NET 11.0.0-rc.1.26425.128 (net11.0, expanded). The supplied patched net11.0 testhost identifies itself as .NET 12.0.0-dev (expanded), runtime checkout `331fa2b32a9c1cbfe1c6b377c5d436b3e04ceb44`. Native uses the supplied ADX/BMI2 blst reference. Rows use the same inputs for all three implementations within a process. Each cell is **constant-time / variable-time / blst**, in µs.
+
+| Operation | Stock .NET 10 | Stock .NET 11 | Patched runtime |
+|---|---:|---:|---:|
+| Fp inverse | 43.025 / 1.981 / 1.351 | 23.269 / 1.771 / 1.358 | 9.917 / 1.436 / 1.406 |
+| Fp2 inverse | 43.340 / 2.195 / 1.423 | 23.133 / 1.994 / 1.432 | 10.092 / 1.478 / 1.486 |
+| Fr inverse | 15.799 / — / 0.794 | 7.907 / — / 0.777 | 3.947 / — / 0.802 |
+| G1 multiply | 250.363 / 182.606 / 47.970 | 130.670 / 96.409 / 47.310 | 56.449 / 39.530 / 49.149 |
+| G2 multiply | 364.162 / 243.895 / 99.499 | 276.906 / 176.733 / 97.781 | 119.563 / 68.515 / 96.226 |
+| G1 to-affine | 44.055 / 2.385 / 1.490 | 23.362 / 1.938 / 1.432 | 9.892 / 1.463 / 1.465 |
+| G2 to-affine | 44.919 / 3.048 / 1.684 | 24.028 / 2.557 / 1.682 | 9.758 / 1.670 / 1.654 |
+| Map G1 | 107.859 / 104.302 / 23.894 | 66.214 / 64.882 / 23.584 | 25.619 / 25.163 / 23.796 |
+| Map G2 | 299.506 / 299.683 / 85.158 | 238.597 / 237.385 / 85.352 | 89.451 / 85.959 / 82.573 |
+
+Fr has no original variable-time inverse API. `SecretBenchmarks` warms each comparison for 0.5 seconds and takes the best of 21 rounds calibrated toward 10 ms each. Inverse/map inputs are fixed nontrivial field values; multiplication uses mapped points and a deterministic scalar reduced modulo r before timing. The managed constant-time multiply still performs its own fixed reduction inside timing. Canonical nonzero scalars keep the pinned native `blst_p1_mult`/`blst_p2_mult` on their GLV/GLS paths: those exports branch to a fallback for noncanonical/zero scalars. Edge-input differential tests also exercise those fallbacks. Native inverses use blst's safegcd path; native to-affine uses its reciprocal path. The managed fixed-chain reciprocal is deliberately retained as a simple baseline and is substantially slower. A safegcd replacement needs its own proof of bounds, verification and measurements.
+
+The original public-input bodies were preserved. The following before/after capture uses their original benchmark inputs and quick harness; values are µs except the first two rows, which are ns. Source changes to existing production files only add `partial` declarations and update documentation. New constant-time paths do not add dispatch to existing APIs.
+
+| Original operation | .NET 10 before → after | .NET 11 before → after | Patched before → after |
+|---|---:|---:|---:|
+| Fp multiply (ns) | 55.40 → 52.49 | 53.61 → 50.16 | 19.63 → 19.34 |
+| Fp2 multiply (ns) | 211.11 → 188.91 | 155.20 → 152.90 | 62.42 → 63.44 |
+| G1 multiply | 179.3 → 181.9 | 98.4 → 100.4 | 38.7 → 38.3 |
+| G2 multiply | 227.9 → 232.5 | 174.8 → 172.0 | 67.9 → 68.1 |
+| G1 MSM 128 | 7433.0 → 7065.1 | 4032.7 → 4026.3 | 1580.7 → 1579.0 |
+| G2 MSM 128 | 13543.6 → 12483.3 | 7173.5 → 7239.4 | 2999.9 → 2984.3 |
+| Pairing check 2 | 1518.03 → 1390.22 | 1193.96 → 1199.00 | 447.56 → 450.07 |
+| Map G1 | 105.5 → 102.9 | 64.2 → 65.3 | 25.2 → 25.2 |
+| Map G2 | 285.0 → 279.9 | 224.5 → 222.4 | 84.9 → 85.0 |
+
+There is no consistent regression; the largest retained slowdown is about 2%. These best samples cannot establish improvements of a few percent. A first .NET 11 after-capture gave 67.87 ns Fp multiply, 230.9 µs G2 multiply and 300.8 µs G2 map. Native G2 timings rose in that interval too; repeating these three rows produced the values above. Both captures are retained. See [raw captures](validation/constant-time/) and [constant-time validation](constant-time-validation.md) for functional, generated-code and timing-leak evidence.
+
+Reproduce with the existing runtime launch commands, selecting `--quick --filter 'CT '` for the new comparison. `--timing-leak --timing-samples 20000 --no-native` selects the separate statistical experiment; it is not part of the ordinary benchmark or test run.
+
 ## Method and caveats
 
 Loops warm for at least 0.5 s and report the best of seven rounds. Fields use 1,000,000 independent operations (30,000 for inversion); the Fr/Fp mul+add loops have a dependent local accumulator. `--quick` divides kernel counts by ten, uses 1,000 tower iterations and ten pairing iterations, and calibrates curve rounds toward 3 ms with best-of-21 sampling. Tower/pairing also use best-of-21 in quick mode. Default curve sweeps cover 1–4,096 points; quick mode selects 1 and 128. `BLST_MSM_SIZES` overrides the sweep. Filters do not change input generation.

@@ -1,0 +1,14 @@
+.NET 12.0.0-dev
+Field kernels: expanded; short rounds.
+Operation | managed ns | blst ns | managed bytes
+Fp multiply | 19.63 | 20.23 | 0
+Fp2 multiply | 62.42 | 61.60 | 0
+Operation | managed ns | native ns | managed bytes
+Pairing check 2 | 447560.00 | 466410.00 | 0
+operation,managed_us,blst_us
+G1 multiply,38.700,46.800
+map G1,25.200,23.100
+G1 MSM 128,1580.700,1707.900
+G2 multiply,67.900,95.500
+map G2,84.900,81.700
+G2 MSM 128,2999.900,4930.900

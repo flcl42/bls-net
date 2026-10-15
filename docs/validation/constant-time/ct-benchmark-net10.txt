@@ -1,0 +1,15 @@
+.NET 10.0.12
+Field kernels: compact; short rounds.
+secret_operation,constant_time_us,variable_time_us,blst_us
+CT Fp inverse,43.025,1.981,1.351
+CT Fp2 inverse,43.340,2.195,1.423
+CT Fr inverse,15.799,NaN,0.794
+CT G1 multiply,250.363,182.606,47.970
+CT G2 multiply,364.162,243.895,99.499
+CT G1 to-affine,44.055,2.385,1.490
+CT G2 to-affine,44.919,3.048,1.684
+CT map G1,107.859,104.302,23.894
+CT map G2,299.506,299.683,85.158
+Operation | managed ns | blst ns | managed bytes
+Operation | managed ns | native ns | managed bytes
+operation,managed_us,blst_us

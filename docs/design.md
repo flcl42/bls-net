@@ -1,6 +1,6 @@
 # Design
 
-The library targets net10.0 and net11.0. Production arithmetic uses fixed-width value types, spans and limb operations, with no BigInteger or native dependency. APIs are variable-time for public inputs.
+The library targets net10.0 and net11.0. Production arithmetic uses fixed-width value types, spans and limb operations, with no BigInteger or native dependency. Original APIs are variable-time for public inputs; explicit constant-time alternatives are described below.
 
 ## Layout and contracts
 
@@ -75,8 +75,31 @@ Miller loops use blst's line formulas and negative-z schedule. Up to 64 active p
 
 Final exponentiation uses inversion, conjugation and Frobenius for the easy part, followed by blst's fixed z/z÷2 chain. Runs of at least 15 squarings use Karabina compression (ePrint 2010/542, Theorems 3.1–3.2), keeping four Fp2 coordinates. Two Fp4 squares update them; one Fp2 inversion reconstructs omitted coordinates. Zero/identity and aliases are explicit. Compression replaces 235 of 315 squares with ten reconstructions, saving 1,248 logical Fp products at the cost of ten base inversions. Repeated cyclotomic square requires cyclotomic input or zero. PairingCheck returns immediately if the Miller product is one.
 
+## Constant-time APIs
+
+The following paths treat field values, scalar bytes, point coordinates, infinity status, equality results and every intermediate derived from them as secret. The point supplied to multiplication may also be secret. Span lengths, kernel policy, type specialization, curve constants, fixed exponents and window/loop counters are public. Scalar multiplication still requires an on-curve subgroup point; validation is the caller's responsibility and the existing validation methods are variable-time.
+
+| API | Contract |
+|---|---|
+| `Fp.InverseConstantTime`, `Fp2.InverseConstantTime`, `Fr.InverseConstantTime` | Fixed Fermat chains; inverse of zero is zero; output may alias input. Fp uses blst's 460-operation `recip-addchain.h` chain, Fp2 inverts its norm, Fr uses a fixed base-16 r-2 chain. |
+| `Fr.FromLittleEndianConstantTime`, `ToLittleEndianConstantTime` | Reduce exactly 32 secret little-endian bytes modulo r, or serialize 32 canonical little-endian bytes. Two trial subtractions suffice because 2^256 < 3r. Length errors depend only on public lengths. |
+| `Fp` / `Fp2` / `Fr`: `IsZeroMask`, `EqualMask`, `Select`, `ConditionalNegate`, `ConditionalSwap` | Masks are `ulong.MaxValue` for true and zero for false. A select takes the set operand first. Callers must supply one of those two masks. Operands and masks may all be secret; aliases, including swapping the same reference, are supported. |
+| `Fp` / `Fp2`: `SqrtConstantTime`, `SignMask` | Return a square-status mask or RFC 9380 sign mask. Square roots match the existing helpers, including their output for nonsquares; only use the root when the status mask is all ones. Zero is a square. |
+| `G1Projective` / `G2Projective`: `MultiplyConstantTime` | Affine and projective overloads; exactly 32 little-endian bytes, reduced modulo r first. Secret base point and scalar, fixed GLV/GLS split, width-five Booth windows, full-scan tables and select-based exceptional handling. Infinity and scalar zero are supported. Projective output may alias input. |
+| `G1Projective` / `G2Projective`: `ToAffineConstantTime`, `AddConstantTime`, `AddAffineConstantTime`, `NegateConstantTime` | Secret points throughout; affine infinity is (0,0), projective infinity has Z=0. Additions cover equal, inverse and infinity operands using blst's dadd/dadd_affine formulas. Conversion always performs the fixed inversion, even for Z=0 or Z=1. |
+| Affine and projective G1/G2: `IsInfinityMask`, `EqualMask`, `Select`, `ConditionalNegate`, `ConditionalSwap` | Secret operands and mask; projective equality uses cross products and handles any Z=0 representation. Affine infinity is preserved by negation. |
+| `MapToCurve.MapToG1ConstantTime`, `MapToG2ConstantTime` | Secret Fp/Fp2 input; same SSWU, isogeny and cofactor map as the original APIs and blst's single-input maps. Candidate roots, denominator exceptions and signs use masks. These methods do not hash a message. |
+
+The scalar split uses fixed 256-step binary division with explicit limb borrows instead of blst's assembly reciprocal-division kernels. G1 produces two 128-bit components with the existing beta-squared/negation endomorphism; G2 produces four base-|z| components with successive -psi images. The window loop includes the top carry window and scans all 16 table entries even for a zero digit. Tables remain projective, avoiding inversions and secret-dependent normalization. Existing doubling formulas already handle Z=0 algebraically. Neither division instructions nor variable-time scalar recoding are used by these paths.
+
+The Fermat reciprocal remains the baseline. A faster Bernstein–Yang/safegcd implementation and generator tables are deferred until a separately verified implementation demonstrates a clear benefit. The existing binary-GCD reciprocal is not used for secrets.
+
+Verification combines BigInteger scalar/inverse references, comparison with the original APIs, optional native blst comparisons, aliases, exceptional point cases, scalar boundaries and every single-bit scalar, and thousands of random field/map/point inputs under both kernel policies. [Constant-time validation](constant-time-validation.md) records the runtime matrix, generated-code audit and opt-in Welch timing experiments. The audit inventories conditional jumps, direct callees, memory-address instructions and variable-latency instruction candidates; manual data-flow review is necessary. A timing experiment that fails to detect leakage is evidence for that capture, not a proof.
+
+Only the recorded Windows x64 runtime/JIT configurations have been audited. JIT-generated code is audited, not formally verified; repeat the audit after runtime, architecture, compiler settings or relevant source changes. These APIs do not protect against power/EM side channels, memory disclosure or physical attacks, and do not promise to erase every JIT/register/stack copy. They provide building blocks for a later signing API, which still needs a security review, message hashing, encodings and protocol-level validation. The original variable-time APIs and MSM retain their public-input contracts.
+
 ## Verification and limits
 
 BigInteger references, Fermat inversion, signed-wide bounds, algebraic identities, canonical parsing, aliases and warmed allocation checks complement native comparisons. Native coverage includes field/tower results, 2,000 maps and single scalars per group, scalar edges and all single-bit scalars, MSM through 1,024 points, and 2,000 pairing inputs. Fp6 is checked algebraically and through Fp12, without custom native exports. Pairing tests cross the 64-pair batch boundary through 130 pairs with infinity gaps, bilinearity and true/false products. Console options also check cold initialization and optimized policy folding.
 
-Binary GCD, recoding, table/bucket selection and exceptional point handling depend on inputs. Secret-key use requires dedicated constant-time paths and security review. See [README](../README.md#build-and-test) for commands and [roadmap](roadmap.md) for remaining APIs and platform work.
+The original binary GCD, recoding, table/bucket selection and exceptional point handling depend on inputs. Use the explicit constant-time alternatives for secrets within their audited configurations; a complete secret-key/signature API still needs security review. See [README](../README.md#build-and-test) for commands and [roadmap](roadmap.md) for remaining APIs and platform work.
