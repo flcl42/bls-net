@@ -72,6 +72,55 @@ These retained component captures (2026-10-13) use blst `f62244ef50ad1a603decdb8
 | G1 MSM 128 | 7227.500 | 1659.600 | 3857.500 | 1648.500 | 1525.400 | 1645.300 |
 | G2 MSM 128 | 12502.700 | 4717.500 | 6882.700 | 4719.000 | 2951.200 | 4734.800 |
 
+## Fused maps on the carry-aware runtime
+
+Capture: 2026-10-15, Ryzen 9 9950X3D, Windows x64, logical processor 3, net11.0 executables, expanded policy, tiering disabled. Before is library `8dd3cc4` with the exact merged `0a303c9` JIT sources; after is library `23aae81` (including `5842f3f`) with the [JIT follow-up](../jit/README.md). Both use the same .NET 12-dev testhost contents and ADX/BMI2 blst `f62244ef`. Builds and tests ran separately from timings. Values below are **medians of three process-level best samples**, from three alternating before/after pairs using the existing `--quick` harness. Each native column comes from those same processes.
+
+| Operation | Before | After | blst before | blst after |
+|---|---:|---:|---:|---:|
+| Map G1, constant-time | 25.333 µs | 22.810 µs | 22.882 µs | 23.177 µs |
+| Map G1, variable-time | 24.970 µs | 22.545 µs | 22.882 µs | 23.177 µs |
+| Map G2, constant-time | 87.659 µs | 82.223 µs | 81.395 µs | 82.655 µs |
+| Map G2, variable-time | 85.081 µs | 81.266 µs | 81.395 µs | 82.655 µs |
+| Fp inverse, constant-time | 9.384 µs | 7.734 µs | 1.324 µs | 1.327 µs |
+| Fp inverse, variable-time | 1.382 µs | 1.379 µs | 1.324 µs | 1.327 µs |
+| G1 multiply, constant-time | 53.616 µs | 53.082 µs | 46.005 µs | 46.561 µs |
+| G1 multiply, variable-time | 37.528 µs | 37.109 µs | 46.005 µs | 46.561 µs |
+| G2 multiply, constant-time | 116.555 µs | 116.229 µs | 94.585 µs | 95.399 µs |
+| G2 multiply, variable-time | 67.471 µs | 66.721 µs | 94.585 µs | 95.399 µs |
+| Pairing check 2 | 431.620 µs | 429.700 µs | 447.350 µs | 448.730 µs |
+| G1 MSM 128 | 1534.400 µs | 1527.400 µs | 1656.400 µs | 1662.400 µs |
+| G2 MSM 128 | 2885.000 µs | 2887.500 µs | 4734.900 µs | 4754.800 µs |
+| Fp multiply | 18.800 ns | 18.860 ns | 18.730 ns | 18.730 ns |
+| Fp2 multiply | 59.620 ns | 59.700 ns | 60.470 ns | 59.840 ns |
+| G1 multiply, original curve inputs | 37.400 µs | 37.200 µs | 45.000 µs | 45.700 µs |
+| G2 multiply, original curve inputs | 66.700 µs | 65.800 µs | 92.700 µs | 92.500 µs |
+
+Maps improve by 4.5–10.0% against their own baseline; fixed-chain Fp inversion improves 17.6%. All four map medians edge native: G1 constant/variable are 0.984/0.973x blst, G2 are 0.995/0.983x. Median paired ratios are 0.983/0.981x for G1 and 0.995/0.987x for G2. G2's constant-time native margin is only 0.5% and is weak evidence: one sample was 0.9% slower than its paired native sample. The three after captures (constant / variable / native, µs) were:
+
+| Map | Run 1 | Run 2 | Run 3 |
+|---|---:|---:|---:|
+| G1 | 22.810 / 22.545 / 22.991 | 22.778 / 22.730 / 23.177 | 22.890 / 22.536 / 23.398 |
+| G2 | 82.350 / 81.266 / 81.578 | 81.955 / 81.091 / 82.655 | 82.223 / 81.615 / 82.657 |
+
+Other requested medians change by -1.4% to +0.3%; the small field slowdowns normalize to +0.3% (Fp) and +1.2% (Fp2) against their paired native columns. These captures do not establish a regression. Native-normalized results and repeated process samples matter more than sub-percent differences.
+
+Isolated profiling with the same rescaled generator points, processor and 21-round minimum method gives reciprocal sqrt 9.300 → 7.668 µs; G1 times -z 12.399 → 11.329 (constant-time 12.612 → 11.590); G2 times -z 29.176 → 28.273 (constant-time 29.646 → 28.392). G2 clearing uses two such multiplications. Disassembly shows no calls inside `SquareNThenMultiply`: 373 sqrt-chain squarings execute in 66 fused runs, and 376 reciprocal-chain squarings in 67 runs. The six-word loop state stays in registers; temporary raw-product words can spill. Final reduction occurs only after the final multiply. The JIT follow-up keeps independent cross-product rows in ADCX/ADOX even beside unmatched diagonals and removes repeated RDX reloads when their multiplier remains live.
+
+The retained formulas use lazy root powers, bounded doubling kernels, a shift-based multiply by eight, a biased Fp2 square difference and direct psi². Complete secret additions remain where a doubling is possible; [cofactor-schedule.md](cofactor-schedule.md) proves the specialized sites and tests actual 3-, 11- and 13-torsion. Blanket point inlining, larger full-adder/liveness budgets and fully unrolled repeated-square reducers were slower and were discarded.
+
+Reproduce the comparison with the existing filter:
+
+```powershell
+$env:DOTNET_ROOT = '<patched testhost>'
+$env:DOTNET_ROLL_FORWARD = 'Major'
+$env:DOTNET_TieredCompilation = '0'
+$env:BLST_BENCH_PROCESSOR = '3'
+& "$env:DOTNET_ROOT/dotnet.exe" 'benchmarks/Nethermind.Crypto.BlsNet.Benchmarks/bin/Release/net11.0/Nethermind.Crypto.BlsNet.Benchmarks.dll' --quick --filter 'CT Fp inverse|CT G1 multiply|CT G2 multiply|CT map|Fp multiply|Fp2 multiply|G1 multiply|G2 multiply|Pairing check 2|MSM 128|map G'
+```
+
+For a fresh baseline use a separate `8dd3cc4` library build and the `0a303c9` JIT. Rebuild after restoring experimental source files: preserved file timestamps can otherwise leave an incremental build stale. Raw experimental captures are ignored local artifacts; the tables above retain the final repeated samples.
+
 ## Constant-time components
 
 Capture: 2026-10-15, Ryzen 9 9950X3D, Windows x64, logical processor 3, tiering disabled. Stock hosts are .NET 10.0.12 (net10.0, compact) and .NET 11.0.0-rc.1.26425.128 (net11.0, expanded). The supplied patched net11.0 testhost identifies itself as .NET 12.0.0-dev (expanded), runtime checkout `331fa2b32a9c1cbfe1c6b377c5d436b3e04ceb44`. Native uses the supplied ADX/BMI2 blst reference. Rows use the same inputs for all three implementations within a process. Each cell is **constant-time / variable-time / blst**, in µs.
@@ -90,7 +139,7 @@ Capture: 2026-10-15, Ryzen 9 9950X3D, Windows x64, logical processor 3, tiering 
 
 Fr has no original variable-time inverse API. `SecretBenchmarks` warms each comparison for 0.5 seconds and takes the best of 21 rounds calibrated toward 10 ms each. Inverse/map inputs are fixed nontrivial field values; multiplication uses mapped points and a deterministic scalar reduced modulo r before timing. The managed constant-time multiply still performs its own fixed reduction inside timing. Canonical nonzero scalars keep the pinned native `blst_p1_mult`/`blst_p2_mult` on their GLV/GLS paths: those exports branch to a fallback for noncanonical/zero scalars. Edge-input differential tests also exercise those fallbacks. Native inverses use blst's safegcd path; native to-affine uses its reciprocal path. The managed fixed-chain reciprocal is deliberately retained as a simple baseline and is substantially slower. A safegcd replacement needs its own proof of bounds, verification and measurements.
 
-The original public-input bodies were preserved. The following before/after capture uses their original benchmark inputs and quick harness; values are µs except the first two rows, which are ns. Source changes to existing production files only add `partial` declarations and update documentation. New constant-time paths do not add dispatch to existing APIs.
+In the earlier constant-time API capture below, the original public-input bodies were preserved. It uses their original benchmark inputs and quick harness; values are µs except the first two rows, which are ns. At that revision, existing production files only gained `partial` declarations and documentation. The subsequent fused-map changes are measured separately above.
 
 | Original operation | .NET 10 before → after | .NET 11 before → after | Patched before → after |
 |---|---:|---:|---:|

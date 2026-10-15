@@ -19,4 +19,4 @@ cmd /c "cd /d R:\ && R:\src\coreclr\build-runtime.cmd -x64 -release -component j
 
 Copy each JIT into a private copy of the testhost's `shared/Microsoft.NETCore.App/<version>/clrjit.dll` while experimenting. Run the existing JIT tests plus the two new files with each matrix configuration; the standalone runner returns 100 on success. Clear stress variables between configurations. Do not combine builds, tests and timings concurrently.
 
-The final Release JIT was installed into the supplied shared testhost after validation. Current map results require this follow-up; the older retained precompile captures only require the original PR.
+The final Release JIT was installed into `C:/Temp/blst-speedy/rpr/artifacts/bin/testhost/net11.0-windows-Release-x64` after validation. Its `shared/Microsoft.NETCore.App/12.0.0/clrjit.dll` SHA-256 is `2E37927C2F21F22923B770DC1F67FF32401CDEC491267BEFB09B6D9F285522D8`. Current map results require this follow-up; the older retained precompile captures only require the original PR.

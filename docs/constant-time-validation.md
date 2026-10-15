@@ -1,6 +1,6 @@
 # Constant-time validation
 
-Implementation: `e7377cfe49c5e2fa825ec269cad340ea584837aa`. Captured 2026-10-15 on Windows x64, Ryzen 9 9950X3D. [API contracts](design.md#constant-time-apis), and [timings](performance.md#constant-time-components) accompany this report. Raw captures are not kept in the repository; `scripts/audit-constant-time.ps1` and the benchmark runner's timing-leak mode regenerate them. No claim of formal verification or independent security review is made.
+Original implementation: `e7377cfe49c5e2fa825ec269cad340ea584837aa`. Current optimized-map results are recorded in [fused map and inversion validation](#fused-map-and-inversion-validation). Captured 2026-10-15 on Windows x64, Ryzen 9 9950X3D. [API contracts](design.md#constant-time-apis), and [timings](performance.md#constant-time-components) accompany this report. Raw captures are not kept in the repository; `scripts/audit-constant-time.ps1` and the benchmark runner's timing-leak mode regenerate them. No claim of formal verification or independent security review is made.
 
 ## Builds and functional results
 
@@ -89,3 +89,45 @@ dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release -
 ```
 
 Use the explicit host/target commands from [performance](performance.md#reproduction) for the other runtimes. These slow, noisy experiments are separate from the default test and benchmark runs. Optional safegcd inversion and fixed generator tables remain future optimization work; all reported constant-time inverses use the fixed Fermat baseline.
+
+## Fused map and inversion validation
+
+The optimized library at `23aae81` passed fourteen complete runs: stock .NET 10.0.12, stock .NET 11.0.0-rc.1.26425.128 and the patched .NET 12-dev host, each with compact/expanded kernels and native enabled/disabled (twelve runs), plus two expanded patched runs with tiering enabled. Native runs passed **1,592,045 checks** each; managed-only runs passed **1,296,999**. Both executable targets built without warnings. The final JIT's twenty regression tests passed all ten Checked tiering/stress configurations described in [jit/README.md](../jit/README.md), plus Release.
+
+New checks cover lazy values immediately below 2p, square counts 0–380, every input/output alias combination, BigInteger powers and native repeated squares/products. Multiplication by eight tests all reduction thresholds and aliases. Doubling runs compare exact coordinates with repeated ordinary doubles, rescaled points, infinity, Y=0 and native operations. Direct psi² checks its constants, exact coordinates and aliases. The [cofactor proof](cofactor-schedule.md) has executable gcd/norm checks, full base/twist points, independent binary scalar multiplication (including the 636-bit effective G2 cofactor), native binary group operations and explicit 3-/11-/13-torsion doubling cases.
+
+The audit script was rerun for both policies on all three hosts, with tiering disabled and enabled. Counts include every reached compiled version, runtime helpers and Tier0/instrumented Tier0 versions:
+
+| Runtime / policy | Tiering off: versions / jumps | Tiering on: versions / jumps | Variable-latency candidates off / on |
+|---|---:|---:|---:|
+| .NET 10 compact | 143 / 177 | 617 / 325 | 0 / 0 |
+| .NET 10 expanded | 162 / 182 | 649 / 336 | 0 / 0 |
+| .NET 11 compact | 140 / 168 | 608 / 318 | 0 / 0 |
+| .NET 11 expanded | 159 / 174 | 637 / 330 | 0 / 0 |
+| Patched compact | 140 / 170 | 733 / 764 | 0 / 12 |
+| Patched expanded | 159 / 175 | 762 / 775 | 0 / 12 |
+
+Manual data-flow review found no secret-dependent jumps or effective addresses. The new leaf arithmetic and psi² use fixed field offsets; repeated squaring and doubling branch only on public counts. G1's choice of cofactor addition tests that same public doubling count; optimized fixed callers fold the choice. The addition/clearing loops seen in the inventory initialize or copy fixed stack frames. The fixed root/inverse tables retain literal indices. No variable-time inversion or scalar recoding is reached.
+
+The twelve patched tiered candidates are public divisions: eight `MemoryMarshal.Cast` divisions use span lengths and fixed generic type sizes; four Tier0/instrumented `SecretMultiply.Multiply` divisions compute `bits / 5`, with bits fixed by the public Fp/Fp2 specialization. None divides point, field or scalar data. Opposite-policy kernels and opposite-type casts in the unresolved inventory are behind public policy/type branches and are covered by the other captures. Remaining runtime callees perform GC coordination, fixed copying/zeroing, or public-length exceptions. The changed map and inversion kernels contain no division instructions.
+
+The timing-leak mode now also measures Fp/Fp2 inversion and G1/G2 maps. Inputs are prepared and shuffled before timing; field random inputs cover [0,2^380), with independent Fp2 coefficients. Each API compares zero, one and low-weight fixed inputs against random inputs. The existing G1/G2 variable-time scalar controls remain mandatory; CT scalar rows obey `--filter` too.
+
+At 20,000 samples per class, all 72 field/map comparisons stayed below |t|=4.5 for both raw and common-cutoff trimmed statistics; all 36 positive controls detected leakage. The largest absolute statistic across both treatments and all four APIs was:
+
+| Runtime / policy | Maximum absolute t | Positive controls |
+|---|---:|---:|
+| .NET 10 compact | 1.753 | 6 / 6 |
+| .NET 10 expanded | 1.881 | 6 / 6 |
+| .NET 11 compact | 2.202 | 6 / 6 |
+| .NET 11 expanded | 3.514 | 6 / 6 |
+| Patched compact | 1.809 | 6 / 6 |
+| Patched expanded | 2.003 | 6 / 6 |
+
+Reproduce with the corresponding host and executable target, processor 3 and tiering disabled:
+
+```powershell
+& "$env:DOTNET_ROOT/dotnet.exe" '<benchmark DLL>' --timing-leak --timing-samples 20000 --no-native --expanded-kernels --filter 'CT map|CT Fp inverse|CT Fp2 inverse'
+```
+
+Repeat with `--compact-kernels`. `scripts/audit-constant-time.ps1` regenerates the code inventories, using `-Tiered` for the warmed capture. These statistical results and manual generated-code review are evidence for the recorded configurations, not a formal proof; repeat after runtime or relevant source changes.

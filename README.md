@@ -85,7 +85,7 @@ The retained EIP-2537 results use Nethermind's BenchmarkDotNet in-process Short 
 | MAP_FP2_TO_G2 | 102.4 µs | 300.8 µs | 87.3 µs |
 | PAIRING_CHECK, 2 pairs | 689.0 µs | 1.76 ms | 595.8 µs |
 
-Stock RyuJIT materializes carries through comparisons and integer values. PR #134039 keeps carries in flags across arithmetic chains, eliminating much of that overhead. To reproduce fast results, build dotnet/runtime from that PR at `0a303c9` or later; no local patch is needed. These results also benefit from algorithmic differences from blst. See [performance](docs/performance.md) for full precompile results, method, caveats and runtime build commands. The Nethermind integration branch is not published yet.
+Stock RyuJIT materializes carries through comparisons and integer values. PR #134039 keeps carries in flags across arithmetic chains, eliminating much of that overhead. To reproduce fast results, build dotnet/runtime from that PR at `0a303c9` or later; no local patch is needed. These results also benefit from algorithmic differences from blst. See [performance](docs/performance.md) for full precompile results, method, caveats and runtime build commands. The newer component map results use a small [JIT follow-up](jit/README.md); see the [repeated before/after capture](docs/performance.md#fused-maps-on-the-carry-aware-runtime). The Nethermind integration branch is not published yet.
 
 ## Credits and license
 
