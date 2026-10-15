@@ -10,7 +10,7 @@ Part of the patched lead comes from different algorithms and timing contracts. M
 
 Nethermind's BenchmarkDotNet benchmarks use the in-process toolchain and Short job on a Ryzen 9 9950X3D VM running Windows 11. The native reference is Nethermind.Crypto.Bls 0.3.17.15 over blst. Managed uses the same Nethermind precompile code over this library, compiled for net10.0. Stock is .NET 10.0.12. Patched is .NET 12.0.0-dev from dotnet/runtime PR #134039 at `331fa2b3` plus [`jit/carry-rows.patch`](../jit/carry-rows.patch).
 
-Values are BenchmarkDotNet means at the supplied precision. Ratios are reported values and can differ from division of rounded cells. The blst column is from the stock run; blst times in the patched run had a mean ratio of 0.980, with a range of 0.838–1.034, or about -16%/+3%. Each managed ratio uses the blst reference from its own run. MSM sizes count point/scalar pairs; pairing sizes count G1/G2 pairs. Addition size 1 means one addition of two points. The g1mul/g2mul rows use the single-multiplication benchmark inputs.
+Values are BenchmarkDotNet means at the supplied precision. Ratios are reported values and can differ from division of rounded cells. The blst column is from the stock run; blst times in the patched run had a mean ratio of 0.980, with a range of 0.838–1.034, or about -16%/+3%. Both managed ratios divide by the blst column. MSM sizes count point/scalar pairs; pairing sizes count G1/G2 pairs. Addition size 1 means one addition of two points. The g1mul/g2mul rows use the single-multiplication benchmark inputs.
 
 The previous column compares patched ratios before and after the latest kernel, JIT and algorithm changes. It uses each capture's own native reference; it does not attribute the whole change to one optimization.
 
