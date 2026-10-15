@@ -24,7 +24,7 @@ EIP-2537 integration and BenchmarkDotNet precompile comparisons exist in a Nethe
 |---|---|
 | Hash-to-field and message hash-to-curve | Expand-message XMD SHA-256, hash-to-field, DST handling and upstream hash-to-curve vectors. Existing map APIs accept field elements only. |
 | BLS signature API | Key generation, signing, verification, aggregation and min-pk/min-sig variants, with explicit validation contracts. |
-| Constant-time extensions and review | Independent security review before signing support; repeat JIT audits on additional runtimes/architectures. Benchmark a verified safegcd reciprocal and generator tables before replacing the fixed-chain baseline. Existing MSM and pairing APIs remain variable-time. |
+| Constant-time extensions and review | Independent security review before signing support; repeat JIT audits on additional runtimes/architectures. Benchmark generator tables. Fixed binary-GCD inverses are implemented and audited on the recorded x64 runtimes. Existing MSM and pairing APIs remain variable-time. |
 | blst-compatible serialization | Compressed and uncompressed point formats, canonical decoding, infinity/sign rules and precise format errors. Raw field/coordinate APIs already exist. |
 | Stock-JIT performance | Main open performance item. Track adoption of PR #134039 into released runtimes and measure arithmetic calling patterns on stock hosts. Preserve compact .NET 10 fallbacks and measure .NET 10 and .NET 11 separately. |
 | CI | Automated builds for both target frameworks, managed tests, native differential jobs and reproducible platform checks. |

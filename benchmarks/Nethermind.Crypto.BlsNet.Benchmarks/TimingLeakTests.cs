@@ -28,18 +28,25 @@ internal static class TimingLeakTests
             if (BenchmarkOptions.Matches("CT G1 multiply")) Measure("G1 constant", fixedClass, samples, s => G1Projective.MultiplyConstantTime(p, s, out _), false);
             controlsPass &= Measure("G2 variable", fixedClass, samples, s => G2Projective.Multiply(q, s, out _), true);
             if (BenchmarkOptions.Matches("CT G2 multiply")) Measure("G2 constant", fixedClass, samples, s => G2Projective.MultiplyConstantTime(q, s, out _), false);
-            if (BenchmarkOptions.Matches("CT Fp inverse"))
-                Measure("Fp inverse constant", fixedClass, samples, FieldInput, a => Fp.InverseConstantTime(out _, a), false, 48);
-            if (BenchmarkOptions.Matches("CT Fp2 inverse"))
-                Measure("Fp2 inverse constant", fixedClass, samples,
-                    bytes => new Fp2(FieldInput(bytes.AsSpan(0, 48).ToArray()), FieldInput(bytes.AsSpan(48).ToArray())),
-                    a => Fp2.InverseConstantTime(out _, a), false, 96);
             if (BenchmarkOptions.Matches("CT map G1"))
                 Measure("map G1 constant", fixedClass, samples, FieldInput, a => MapToCurve.MapToG1ConstantTime(a, out _), false, 48);
             if (BenchmarkOptions.Matches("CT map G2"))
-                Measure("map G2 constant", fixedClass, samples,
-                    bytes => new Fp2(FieldInput(bytes.AsSpan(0, 48).ToArray()), FieldInput(bytes.AsSpan(48).ToArray())),
-                    a => MapToCurve.MapToG2ConstantTime(a, out _), false, 96);
+                Measure("map G2 constant", fixedClass, samples, ComplexInput, a => MapToCurve.MapToG2ConstantTime(a, out _), false, 96);
+        }
+        foreach (string fixedClass in new[] { "zero", "one", "two", "minus-one", "power-of-two", "low-weight" })
+        {
+            // This remains a mandatory positive control when testing inverses.
+            controlsPass &= Measure("Fp inverse variable", fixedClass, samples, FieldInput, a => Fp.Inverse(out _, a), true, 48);
+            if (BenchmarkOptions.Matches("CT Fp inverse"))
+                Measure("Fp inverse constant", fixedClass, samples, FieldInput, a => Fp.InverseConstantTime(out _, a), false, 48);
+            if (BenchmarkOptions.Matches("CT Fp2 inverse"))
+                Measure("Fp2 inverse constant", fixedClass, samples, ComplexInput, a => Fp2.InverseConstantTime(out _, a), false, 96);
+            if (BenchmarkOptions.Matches("CT Fr inverse"))
+                Measure("Fr inverse constant", fixedClass, samples, bytes => Fr.FromLittleEndianConstantTime(bytes), a => Fr.InverseConstantTime(out _, a), false, 32);
+            if (BenchmarkOptions.Matches("CT G1 to-affine"))
+                Measure("G1 affine constant", fixedClass, samples, bytes => Rescale(FieldInput(bytes)), a => _ = a.ToAffineConstantTime(), false, 48);
+            if (BenchmarkOptions.Matches("CT G2 to-affine"))
+                Measure("G2 affine constant", fixedClass, samples, bytes => Rescale(ComplexInput(bytes)), a => _ = a.ToAffineConstantTime(), false, 96);
         }
         if (!controlsPass) throw new InvalidOperationException("Timing positive control did not detect leakage; the experiment is inconclusive. Increase samples or reduce host noise.");
     }
@@ -50,11 +57,28 @@ internal static class TimingLeakTests
     // Convert before timing, so parsing, canonicalization and allocation cannot affect a class.
     private static Fp FieldInput(byte[] bytes)
     {
-        // A fixed-size random subset [0,2^380) of the field; Montgomery values still
-        // exercise all six limbs. The three fixed classes also use this conversion.
-        bytes[^1] &= 0x0f;
-        if (!Fp.TryFromLittleEndian(bytes, out Fp field)) throw new InvalidOperationException();
+        // Preserve canonical fixed inputs, including p-1. Invalid random inputs
+        // are folded into [0,2^380) before timing.
+        if (!Fp.TryFromLittleEndian(bytes, out Fp field))
+        { bytes[^1] &= 0x0f; if (!Fp.TryFromLittleEndian(bytes, out field)) throw new InvalidOperationException(); }
         return field;
+    }
+
+    private static Fp2 ComplexInput(byte[] bytes)
+        => new(FieldInput(bytes.AsSpan(0, 48).ToArray()), FieldInput(bytes.AsSpan(48).ToArray()));
+
+    private static G1Projective Rescale(Fp z)
+    {
+        Fp.Square(out Fp z2, z); Fp.Multiply(out Fp z3, z2, z);
+        Fp.Multiply(out Fp x, G1Affine.Generator.X, z2); Fp.Multiply(out Fp y, G1Affine.Generator.Y, z3);
+        return new(x, y, z);
+    }
+
+    private static G2Projective Rescale(Fp2 z)
+    {
+        Fp2.Square(out Fp2 z2, z); Fp2.Multiply(out Fp2 z3, z2, z);
+        Fp2.Multiply(out Fp2 x, G2Affine.Generator.X, z2); Fp2.Multiply(out Fp2 y, G2Affine.Generator.Y, z3);
+        return new(x, y, z);
     }
 
     private static bool Measure<T>(string name, string fixedClass, int count, Func<byte[], T> prepare, Action<T> action, bool control, int byteCount)
@@ -62,7 +86,17 @@ internal static class TimingLeakTests
         Random random = new(0x4354);
         byte[] fixedScalar = new byte[byteCount];
         if (fixedClass == "one") fixedScalar[0] = 1;
+        if (fixedClass == "two") fixedScalar[0] = 2;
+        if (fixedClass == "power-of-two") fixedScalar[15] = 1;
         if (fixedClass == "low-weight") { fixedScalar[0] = 1; fixedScalar[15] = 1; fixedScalar[31] = 0x40; }
+        if (fixedClass == "minus-one")
+        {
+            byte[] minusOne = Convert.FromHexString(byteCount == 32
+                ? "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000000"
+                : "1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaaa");
+            Array.Reverse(minusOne); minusOne.CopyTo(fixedScalar, 0);
+            if (byteCount == 96) minusOne.CopyTo(fixedScalar, 48);
+        }
         T[] inputs = new T[count * 2];
         bool[] classes = new bool[inputs.Length];
         for (int i = 0; i < inputs.Length; i++)

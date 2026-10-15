@@ -18,7 +18,7 @@ if (diagnostic is not null)
 }
 Console.WriteLine($"Field kernels: {(Fp.UseExpandedKernels ? "expanded" : "compact")}");
 if (args.Contains("--constant-time-audit") || args.Contains("--constant-time-audit-warm")) { ConstantTimeAudit.Run(args.Contains("--constant-time-audit-warm")); return; }
-int secret = ConstantTimeTests.Run(native);
+int secret = InverseTests.Run(native) + ConstantTimeTests.Run(native);
 if (args.Contains("--constant-time-only") || args.Contains("--constant-time-audit")) return;
 Console.WriteLine("Arithmetic");
 int arithmetic = ArithmeticTests.Run();

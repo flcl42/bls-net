@@ -21,7 +21,7 @@ public partial struct Fp2
     /// <summary>Swaps for an all-ones mask. All inputs may be secret; permits identical references.</summary>
     public static void ConditionalSwap(ref Fp2 left, ref Fp2 right, ulong mask)
     { Fp2 a = left, b = right; Select(out left, b, a, mask); Select(out right, a, b, mask); }
-    /// <summary>Secret field inverse using the norm and fixed Fp chain. Zero maps to zero; permits aliases.</summary>
+    /// <summary>Secret field inverse using the norm and fixed Fp binary GCD. Zero maps to zero; permits aliases.</summary>
     public static void InverseConstantTime(out Fp2 result, in Fp2 value)
     {
         Fp.MultiplyComposite(out Fp norm, value.C0, value.C0);
