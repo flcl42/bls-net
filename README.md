@@ -47,7 +47,7 @@ Not implemented: hash-to-field and message hash-to-curve with DST, a BLS signatu
 
 ## Build and test
 
-Install the .NET 11 SDK selected by `global.json` (`11.0.100-rc.1.26425.128`, with `latestFeature` roll-forward enabled). The library targets `net10.0;net11.0`; test runners target `net10.0;net11.0`, and the field benchmark runner targets `net11.0`. Run these commands from the repository root:
+Install the .NET 11 SDK selected by `global.json` (`11.0.100-rc.1.26425.128`, with `latestFeature` roll-forward enabled). The library targets `net10.0;net11.0`. Test runners default to `net11.0`; build them for .NET 10 with `-p:BlsNetTestTargetFramework=net10.0`. The field benchmark runner targets `net11.0`. Run these commands from the repository root:
 
 ```powershell
 dotnet build Nethermind.Crypto.BlsNet.slnx -c Release
@@ -76,17 +76,17 @@ dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -f net
 dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0 -- --timing
 ```
 
-All runners measure managed operations without native blst; native columns are skipped when it is missing. The EIP-2537 precompile results below use Nethermind's BenchmarkDotNet in-process Short job on a Ryzen 9 9950X3D VM with Windows 11. The native baseline is Nethermind.Crypto.Bls 0.3.17.15; the patched JIT is .NET 12.0.0-dev at runtime PR #134039 revision `331fa2b3` plus the carry-row patch.
+All runners measure managed operations without native blst; native columns are skipped when it is missing. The EIP-2537 precompile results below use Nethermind's BenchmarkDotNet in-process Short job on a Ryzen 9 9950X3D VM with Windows 11. The native baseline is Nethermind.Crypto.Bls 0.3.17.15; managed uses the same precompile code over this library, compiled for net10.0. Stock is .NET 10.0.12; the patched JIT is .NET 12.0.0-dev at runtime PR #134039 revision `331fa2b3` plus the carry-row patch.
 
 | Precompile | blst | Managed .NET 10 | Managed patched JIT |
 |---|---:|---:|---:|
-| G1ADD | 2.5 µs | 4.8 µs | 2.3 µs |
-| G1MSM, 128 points | 2.72 ms | 10.26 ms | 2.67 ms |
-| G2MSM, 128 points | 6.52 ms | 18.25 ms | 7.16 ms |
-| MAP_FP2_TO_G2 | 99.1 µs | 297.4 µs | 110.7 µs |
-| PAIRING_CHECK, 2 pairs | 678.1 µs | 1.85 ms | 780.6 µs |
+| G1ADD | 2.7 µs | 4.9 µs | 2.2 µs |
+| G1MSM, 128 points | 2.73 ms | 10.06 ms | 2.22 ms |
+| G2MSM, 128 points | 6.45 ms | 14.39 ms | 3.64 ms |
+| MAP_FP2_TO_G2 | 102.4 µs | 300.8 µs | 87.3 µs |
+| PAIRING_CHECK, 2 pairs | 689.0 µs | 1.76 ms | 595.8 µs |
 
-Stock .NET 10 precompiles take about 1.8–4× blst's time. The patched JIT brings most operations near parity; pairing checks remain 15–19% slower. See [performance](docs/performance.md) for the full precompile and component tables, ratios, measurement caveats and reproduction steps. The Nethermind integration branch is not published yet.
+Stock .NET 10 takes about 1.5–3.8x blst's time in the condensed precompile table; with the carry-aware JIT every measured precompile is faster, at 0.50–0.93x. See [performance](docs/performance.md) for full tables, algorithmic differences, measurement caveats and reproduction steps; the Nethermind integration branch is not published yet.
 
 The optional [carry-aware JIT patch](jit/) and reproduction notes describe the runtime experiment. It is not required to build or use this library.
 

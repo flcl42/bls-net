@@ -1,278 +1,285 @@
 # Performance
 
-The [round 3 field and JIT report](field-kernel-round3-report.md) measures the
-merged algorithm/field baseline at `75a7ccc` against symmetric Fp squaring,
-direct disjoint-output raw products, inlined Fp2 subtraction and larger bounded
-carry-analysis allowances. It includes kernels and tower/pairing/curve/map/MSM
-paths on all three runtimes. Earlier tables below retain their original code
-and JIT revisions.
+With the carry-aware JIT, every measured EIP-2537 precompile is faster than blst. G1 addition takes 0.83x blst's time, G1 MSM 0.76–0.82x, and G1 multiplication 0.79x. G2 addition takes 0.73x, G2 MSM 0.50–0.69x, and G2 multiplication 0.63x. Maps take 0.85–0.93x and pairing checks 0.82–0.89x. These ranges cover the condensed table below; ratios are managed time divided by blst time, so lower is faster.
 
-The subsequent [algorithm-layer follow-up](agentG-report.md) records three-runtime before/after measurements, native Fp6 timings, full MSM sweeps, integration profiles, local commits and validation. It includes compressed final-exponentiation powers, an early return when the easy part yields one, and endomorphism-derived multiplication/MSM tables. The [operation-count audit](algorithm-audit.md) explains both the gains and the remaining gaps. The historical measurements below are retained as their original captures.
+Stock .NET 10 takes about 1.5–3.8x blst's time in that table: G1 addition 1.84x, MSM 2.84–3.75x and multiplication 3.75x; G2 addition 1.77x, MSM 1.52–2.84x and multiplication 2.11x; maps 2.94–3.73x; pairing 2.51–2.66x. Stock RyuJIT emits MULX but materializes carries through comparisons, SETcc and MOVZX. One Fp multiply costs about 51–53 ns on stock .NET 10 versus 19–20 ns with the patch. Preserving carries in ADC/ADCX/ADOX chains removes much of that cost.
 
-The [round 3 algorithm report](agentG-round3-report.md) measures the merged field kernels plus fused tower/map operations and paired Miller lines. It includes matched before/after captures on all three runtimes, full MSM sweeps, normal-input precompile profiles, bounds and validation. The retained changes use compact fallbacks on stock .NET 10.
-
-The historical [algorithm-layer follow-up](agentG-report.md) includes an unmerged prototype with repeated-point MSM and identity-exponent shortcuts. Its measurements and the original [operation-count audit](algorithm-audit.md) remain as their original captures. Those shortcuts are excluded from the current implementation and round 3 profiles.
-
-The follow-up uses Agent F's final shared JIT update for both patched baseline and final captures, with Fp/Fp2 source changes still unmerged. General final exponentiation improves by about 9%, G2 multiplication by about 29%, and all sampled patched MSM sizes beat their same-process native timings. General pairing and maps still retain gaps; the full report distinguishes those paths from repeated-point MSMs and cancelling-pair precompile inputs.
-
-On stock .NET 10, the managed EIP-2537 precompiles are about 1.8–4× slower than blst. With the experimental carry-aware JIT, G1 operations take 0.83–1.02× blst's time, G2 addition 0.81×, G2 MSM about 1.00–1.12×, maps 1.06–1.12× and pairing checks 1.15–1.19×. Most operations reach or approach parity; pairing retains a 15–19% gap. Ratios are managed time divided by blst time, so lower is faster.
-
-The main gap is carry handling. In the latest field-kernel measurements, stock RyuJIT emits MULX but materializes carry bits with comparisons, `setb` and `movzx` rather than retaining ADC/ADCX/ADOX chains. The carry-aware patch preserves these chains and flag-based reductions. An Fp multiply falls from about 53 ns on stock .NET 10/11 to about 20 ns, close to native ADX blst. Large formulas also need compact arithmetic calls to avoid JIT budgets and register pressure.
+Part of the patched lead comes from different algorithms and timing contracts. Managed scalar operations are variable-time for public inputs; blst's single-point multiplication is constant-time, including G2 multiplication. Managed MSM splits scalars with GLV/GLS endomorphisms and uses batch-affine buckets at measured thresholds. blst's Pippenger uses neither. Compressed cyclotomic powers and fused map, point and Miller arithmetic also reduce work. The precompile timings therefore measure the complete implementations, rather than isolating a JIT advantage. They establish results for these benchmark inputs, not every possible input or platform.
 
 ## EIP-2537 precompiles
 
-These results use Nethermind's BenchmarkDotNet precompile benchmarks, an in-process toolchain and the Short job on a Ryzen 9 9950X3D VM running Windows 11. The native baseline is Nethermind.Crypto.Bls 0.3.17.15 over blst. The managed variants use the same Nethermind precompile code with the math replaced by this library. The patched runtime is .NET 12.0.0-dev built from dotnet/runtime PR #134039 at `331fa2b3` plus [`jit/carry-rows.patch`](../jit/carry-rows.patch).
+Nethermind's BenchmarkDotNet benchmarks use the in-process toolchain and Short job on a Ryzen 9 9950X3D VM running Windows 11. The native reference is Nethermind.Crypto.Bls 0.3.17.15 over blst. Managed uses the same Nethermind precompile code over this library, compiled for net10.0. Stock is .NET 10.0.12. Patched is .NET 12.0.0-dev from dotnet/runtime PR #134039 at `331fa2b3` plus [`jit/carry-rows.patch`](../jit/carry-rows.patch).
 
-The table uses BenchmarkDotNet means, with times rounded to the supplied report precision. Ratios are the reported values and can differ from division of the displayed timings. The displayed blst column is the .NET 10 run; native timings agreed between runs within about ±6% (patched/stock mean ratio 1.005, range 0.951–1.063). Units appear in every timing cell. MSM input sizes count point/scalar pairs; pairing sizes count G1/G2 pairs. The g1mul/g2mul cases measure the single-multiplication benchmark inputs. For addition, input size 1 means one addition of two points.
+Values are BenchmarkDotNet means at the supplied precision. Ratios are reported values and can differ from division of rounded cells. The blst column is from the stock run; blst times in the patched run had a mean ratio of 0.980, with a range of 0.838–1.034, or about -16%/+3%. Each managed ratio uses the blst reference from its own run. MSM sizes count point/scalar pairs; pairing sizes count G1/G2 pairs. Addition size 1 means one addition of two points. The g1mul/g2mul rows use the single-multiplication benchmark inputs.
 
-| Precompile | Points / pairs | blst | Managed .NET 10 | Ratio | Managed patched JIT | Ratio |
+The previous column compares patched ratios before and after the latest kernel, JIT and algorithm changes. It uses each capture's own native reference; it does not attribute the whole change to one optimization.
+
+| Precompile | Points / pairs | blst | Managed .NET 10 | Ratio | Managed patched JIT | Ratio | Patched ratio, previous → now |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| G1ADD | 1 | 2.7 µs | 4.9 µs | 1.84x | 2.2 µs | 0.83x | 0.93x → 0.83x |
+| G1MSM | 1 | 83.7 µs | 313.6 µs | 3.75x | 65.1 µs | 0.78x | 0.93x → 0.78x |
+| G1MSM | 2 | 186.5 µs | 530.4 µs | 2.84x | 142.5 µs | 0.76x | 0.99x → 0.76x |
+| G1MSM | 8 | 406.7 µs | 1.48 ms | 3.64x | 322.0 µs | 0.79x | 0.92x → 0.79x |
+| G1MSM | 32 | 1.04 ms | 3.41 ms | 3.27x | 841.3 µs | 0.81x | 1.02x → 0.81x |
+| G1MSM | 64 | 1.64 ms | 6.13 ms | 3.73x | 1.33 ms | 0.81x | 1.02x → 0.81x |
+| G1MSM | 128 | 2.73 ms | 10.06 ms | 3.68x | 2.22 ms | 0.81x | 0.98x → 0.81x |
+| G1MSM | 256 | 4.53 ms | 13.03 ms | 2.88x | 3.72 ms | 0.82x | 0.99x → 0.82x |
+| G1MSM | 512 | 7.60 ms | 22.33 ms | 2.94x | 6.01 ms | 0.79x | 0.94x → 0.79x |
+| G1MSM | 2048 | 23.59 ms | 78.41 ms | 3.32x | 18.28 ms | 0.77x | 0.83x → 0.77x |
+| G1MSM | 4096 | 42.80 ms | 141.60 ms | 3.31x | 32.84 ms | 0.77x | 0.86x → 0.77x |
+| G1 mult (g1mul) | 1 | 81.9 µs | 307.3 µs | 3.75x | 64.4 µs | 0.79x | 0.94x → 0.79x |
+| G2ADD | 1 | 4.2 µs | 7.5 µs | 1.77x | 3.1 µs | 0.73x | 0.81x → 0.73x |
+| G2MSM | 1 | 147.4 µs | 346.2 µs | 2.35x | 99.7 µs | 0.68x | 1.06x → 0.68x |
+| G2MSM | 2 | 436.5 µs | 665.3 µs | 1.52x | 219.0 µs | 0.50x | 1.06x → 0.50x |
+| G2MSM | 8 | 866.0 µs | 1.83 ms | 2.11x | 595.1 µs | 0.69x | 1.00x → 0.69x |
+| G2MSM | 32 | 2.85 ms | 4.96 ms | 1.74x | 1.46 ms | 0.51x | 1.12x → 0.51x |
+| G2MSM | 64 | 4.14 ms | 8.41 ms | 2.03x | 2.25 ms | 0.54x | 1.12x → 0.54x |
+| G2MSM | 128 | 6.45 ms | 14.39 ms | 2.23x | 3.64 ms | 0.56x | 1.10x → 0.56x |
+| G2MSM | 256 | 11.07 ms | 27.60 ms | 2.49x | 6.24 ms | 0.56x | 1.11x → 0.56x |
+| G2MSM | 512 | 19.33 ms | 44.56 ms | 2.31x | 10.62 ms | 0.55x | 1.10x → 0.55x |
+| G2MSM | 2048 | 58.92 ms | 167.37 ms | 2.84x | 34.75 ms | 0.59x | 1.12x → 0.59x |
+| G2MSM | 4096 | 104.81 ms | 261.38 ms | 2.49x | 63.37 ms | 0.60x | 1.11x → 0.60x |
+| G2 mult (g2mul) | 1 | 155.4 µs | 327.8 µs | 2.11x | 97.5 µs | 0.63x | 1.09x → 0.63x |
+| MAP_FP_TO_G1 | 1 | 28.7 µs | 107.2 µs | 3.73x | 26.7 µs | 0.93x | 1.06x → 0.93x |
+| MAP_FP2_TO_G2 | 1 | 102.4 µs | 300.8 µs | 2.94x | 87.3 µs | 0.85x | 1.12x → 0.85x |
+| PAIRING_CHECK | 1 | 476.6 µs | 1.26 ms | 2.64x | 392.7 µs | 0.82x | 1.17x → 0.82x |
+| PAIRING_CHECK | 2 | 689.0 µs | 1.76 ms | 2.55x | 595.8 µs | 0.86x | 1.15x → 0.86x |
+| PAIRING_CHECK | 4 | 979.5 µs | 2.46 ms | 2.51x | 824.3 µs | 0.84x | 1.19x → 0.84x |
+| PAIRING_CHECK | 8 | 1.45 ms | 3.86 ms | 2.66x | 1.29 ms | 0.89x | 1.18x → 0.89x |
+
+## Component and kernel measurements
+
+These tables retain the final timings from separate field and algorithm captures on 2026-10-13. They use stock .NET 10.0.12, stock .NET 11 RC1 (`11.0.0-rc.1.26425.128`) and the patched .NET 12.0.0-dev host. Native components use blst `f62244ef50ad1a603decdb8f215e982d2a467bb6`, built with ADX/BMI2. This differs from the bundled precompile reference. Each native value is paired with its managed value in the same process.
+
+The kernel capture includes symmetric Fp square and disjoint-output raw products. The algorithm capture includes fused tower/map arithmetic and paired Miller lines, using the final JIT and the preceding Fp/Fp2 source revision. These are separate measurements, not one capture of all final changes together. The precompile table above measures the combined implementation. Component calls have different validation, conversion and harness costs from complete precompiles.
+
+### Field kernels
+
+Times are ns per operation. Native squares call the dedicated `blst_fp_sqr` and `blst_fp2_sqr` exports. Wide helpers have no equivalent exported blst ABI.
+
+| Operation (ns) | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
 |---|---:|---:|---:|---:|---:|---:|
-| G1ADD | 1 | 2.5 µs | 4.8 µs | 1.95x | 2.3 µs | 0.93x |
-| G1MSM | 1 | 81.2 µs | 321.1 µs | 3.95x | 75.5 µs | 0.93x |
-| G1MSM | 2 | 182.4 µs | 613.4 µs | 3.36x | 180.4 µs | 0.99x |
-| G1MSM | 8 | 398.8 µs | 1.27 ms | 3.18x | 365.6 µs | 0.92x |
-| G1MSM | 32 | 1.03 ms | 3.97 ms | 3.86x | 1.05 ms | 1.02x |
-| G1MSM | 64 | 1.61 ms | 6.27 ms | 3.90x | 1.64 ms | 1.02x |
-| G1MSM | 128 | 2.72 ms | 10.26 ms | 3.77x | 2.67 ms | 0.98x |
-| G1MSM | 256 | 4.53 ms | 17.52 ms | 3.87x | 4.49 ms | 0.99x |
-| G1MSM | 512 | 7.48 ms | 24.98 ms | 3.34x | 7.03 ms | 0.94x |
-| G1MSM | 2048 | 23.68 ms | 76.43 ms | 3.23x | 19.72 ms | 0.83x |
-| G1MSM | 4096 | 42.29 ms | 140.79 ms | 3.33x | 36.18 ms | 0.86x |
-| G1 mult (g1mul) | 1 | 81.2 µs | 321.3 µs | 3.96x | 76.5 µs | 0.94x |
-| G2ADD | 1 | 4.1 µs | 7.4 µs | 1.81x | 3.4 µs | 0.81x |
-| G2MSM | 1 | 153.0 µs | 423.8 µs | 2.77x | 161.9 µs | 1.06x |
-| G2MSM | 2 | 364.6 µs | 892.2 µs | 2.45x | 387.3 µs | 1.06x |
-| G2MSM | 8 | 828.3 µs | 2.02 ms | 2.44x | 828.9 µs | 1.00x |
-| G2MSM | 32 | 2.46 ms | 6.86 ms | 2.78x | 2.76 ms | 1.12x |
-| G2MSM | 64 | 3.95 ms | 10.87 ms | 2.76x | 4.40 ms | 1.12x |
-| G2MSM | 128 | 6.52 ms | 18.25 ms | 2.80x | 7.16 ms | 1.10x |
-| G2MSM | 256 | 10.85 ms | 30.56 ms | 2.82x | 12.08 ms | 1.11x |
-| G2MSM | 512 | 18.37 ms | 52.81 ms | 2.88x | 20.28 ms | 1.10x |
-| G2MSM | 2048 | 56.62 ms | 167.24 ms | 2.95x | 63.44 ms | 1.12x |
-| G2MSM | 4096 | 103.40 ms | 303.89 ms | 2.94x | 114.62 ms | 1.11x |
-| G2 mult (g2mul) | 1 | 146.6 µs | 427.4 µs | 2.92x | 160.1 µs | 1.09x |
-| MAP_FP_TO_G1 | 1 | 28.2 µs | 107.8 µs | 3.82x | 30.0 µs | 1.06x |
-| MAP_FP2_TO_G2 | 1 | 99.1 µs | 297.4 µs | 3.00x | 110.7 µs | 1.12x |
-| PAIRING_CHECK | 1 | 464.7 µs | 1.37 ms | 2.96x | 544.6 µs | 1.17x |
-| PAIRING_CHECK | 2 | 678.1 µs | 1.85 ms | 2.73x | 780.6 µs | 1.15x |
-| PAIRING_CHECK | 4 | 909.2 µs | 2.63 ms | 2.89x | 1.08 ms | 1.19x |
-| PAIRING_CHECK | 8 | 1.45 ms | 4.17 ms | 2.87x | 1.72 ms | 1.18x |
+| Fp multiply | 50.79 | 18.94 | 49.72 | 18.74 | 19.77 | 19.76 |
+| Fp square | 50.48 | 18.11 | 43.77 | 18.18 | 19.22 | 18.61 |
+| Fp2 multiply | 183.96 | 59.86 | 145.86 | 59.52 | 61.10 | 61.37 |
+| Fp2 square | 117.92 | 40.59 | 114.70 | 40.30 | 42.89 | 40.98 |
+| Fp inverse | 1841.48 | 1321.54 | 1656.70 | 1331.71 | 1332.87 | 1365.13 |
+| MultiplyWide | 26.67 | — | 20.93 | — | 9.43 | — |
+| ReduceWide | 43.06 | — | 40.31 | — | 18.66 | — |
+| ReduceWideSmall | 36.59 | — | 33.53 | — | 16.32 | — |
+| AddWide | 5.83 | — | 5.81 | — | 4.21 | — |
+| SubtractWide | 5.85 | — | 5.84 | — | 1.97 | — |
+| AddUnreduced | 2.08 | — | 2.10 | — | 0.89 | — |
+| Halve | 3.84 | — | 3.86 | — | 3.13 | — |
+| Negate | 3.27 | 3.14 | 3.28 | 3.06 | 1.78 | 3.10 |
+| SubtractSumComposite | 14.26 | — | 14.11 | — | 3.19 | — |
+| Fp add | 5.93 | 3.03 | 5.93 | 3.02 | 2.08 | 2.87 |
+| Fp subtract | 5.96 | 2.90 | 6.04 | 2.90 | 2.08 | 2.88 |
+| MultiplyComposite | 53.07 | 18.82 | 52.13 | 19.06 | 19.62 | 18.97 |
+| ReduceWidePositive | 36.65 | — | 28.96 | — | 12.37 | — |
+| ReduceWideDifference | 39.93 | — | 38.69 | — | 14.37 | — |
+| Fp2 add | 13.42 | 5.19 | 13.42 | 5.18 | 3.83 | 5.32 |
+| Fp2 subtract | 12.81 | 5.06 | 12.63 | 5.15 | 3.79 | 5.19 |
+| Fp2 mul by 3 | 27.67 | 6.38 | 27.66 | 6.47 | 5.91 | 6.57 |
+| Fp2 mul by 4 | 28.18 | 6.97 | 28.26 | 7.12 | 5.61 | 7.19 |
+| Fp2 mul by 8 | 41.70 | 8.46 | 41.68 | 8.51 | 8.33 | 8.68 |
+| MultiplyWideNoAlias | 27.32 | — | 20.58 | — | 9.04 | — |
 
-### Reproducing the integration benchmarks
+### Kernel modes and target frameworks
 
-The integration lives in a Nethermind branch that is not published yet. This repository contains component runners; the precompile table also requires the Nethermind integration and its benchmark inputs.
+Times are ns per operation in a separate final capture. Overrides compare both formulas on each supported runtime/target combination. A net11.0 assembly cannot run on .NET 10. Fp multiplication retains the same two-row CIOS kernel in both modes.
 
-The integration links `src/Nethermind.Crypto.BlsNet/**/*.cs` into a Nethermind library project, excluding `bin/` and `obj/`. It references that project from the managed precompile variants and benchmark projects. Keep the existing precompile parsing, validation and output encoding, replace the arithmetic calls, and register the `ManagedBls12381*Benchmark` classes alongside the native `Bls12381*Benchmark` classes. Scalar byte order and padded coordinate conversion remain in the precompile layer.
+| Runtime | Target | Mode | Fp multiply | Fp square | Fp2 multiply | Fp2 square | Fp inverse |
+|---|---|---|---:|---:|---:|---:|---:|
+| stock10 | net10.0 | compact | 50.82 | 50.43 | 184.32 | 118.57 | 1790.03 |
+| stock10 | net10.0 | expanded | 50.52 | 46.16 | 256.76 | 181.16 | 1856.23 |
+| stock11 | net10.0 | compact | 49.68 | 50.00 | 181.38 | 114.51 | 1653.00 |
+| stock11 | net10.0 | expanded | 49.58 | 43.62 | 145.54 | 112.85 | 1645.91 |
+| stock11 | net11.0 | compact | 50.53 | 50.92 | 180.75 | 114.72 | 1650.17 |
+| stock11 | net11.0 | expanded | 49.40 | 43.60 | 145.32 | 113.19 | 1655.87 |
+| patched | net10.0 | compact | 18.93 | 18.68 | 66.91 | 43.38 | 1305.52 |
+| patched | net10.0 | expanded | 18.84 | 18.15 | 59.61 | 42.16 | 1320.28 |
+| patched | net11.0 | compact | 18.83 | 18.50 | 66.14 | 43.89 | 1313.31 |
+| patched | net11.0 | expanded | 18.96 | 18.05 | 59.81 | 41.81 | 1302.65 |
 
-From the integrated Nethermind checkout, build and run the runner with the in-process toolchain:
+### Extension tower and pairing
+
+Times are µs per operation. General pairing products are nontrivial.
+
+| Operation (µs) | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
+|---|---:|---:|---:|---:|---:|---:|
+| Fp6 multiply | 1.141 | 0.377 | 0.959 | 0.380 | 0.374 | 0.380 |
+| Fp6 square | 1.026 | 0.287 | 0.747 | 0.283 | 0.285 | 0.278 |
+| Fp12 multiply | 3.386 | 1.133 | 2.956 | 1.177 | 1.101 | 1.150 |
+| Fp12 square | 2.496 | 0.815 | 2.139 | 0.848 | 0.802 | 0.816 |
+| Fp12 sparse multiply | 2.330 | 0.761 | 1.966 | 0.759 | 0.764 | 0.757 |
+| Fp12 two sparse multiplies | 4.623 | 1.522 | 3.867 | 1.530 | 1.457 | 1.529 |
+| Cyclotomic square | 1.777 | 0.499 | 1.489 | 0.497 | 0.512 | 0.498 |
+| Miller 1 | 472.380 | 147.730 | 398.230 | 146.760 | 149.190 | 146.880 |
+| Miller 8 | 2708.710 | 824.580 | 2244.570 | 831.320 | 831.410 | 833.620 |
+| Final exponentiation | 593.630 | 203.070 | 507.130 | 208.340 | 184.910 | 204.430 |
+| Pairing check 1 | 1067.600 | 350.180 | 899.490 | 361.730 | 338.460 | 351.010 |
+| Pairing check 2 | 1385.150 | 449.030 | 1157.450 | 457.340 | 435.650 | 453.860 |
+| Pairing check 8 | 3287.600 | 1032.190 | 2734.880 | 1041.830 | 1033.260 | 1034.350 |
+
+### Curves and maps
+
+Times are µs per operation. Add + affine includes affine conversion; maps and scalar multiplication return projective points.
+
+| Operation (µs) | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
+|---|---:|---:|---:|---:|---:|---:|
+| G1 add+affine | 3.862 | 1.757 | 2.836 | 1.749 | 1.773 | 1.762 |
+| G1 subgroup | 119.152 | 23.932 | 68.912 | 23.879 | 24.394 | 24.187 |
+| G1 multiply | 175.662 | 45.294 | 100.121 | 45.669 | 37.992 | 45.815 |
+| map G1 | 100.513 | 22.453 | 66.451 | 22.528 | 24.853 | 22.759 |
+| G2 add+affine | 6.135 | 2.648 | 4.969 | 2.640 | 2.620 | 2.655 |
+| G2 subgroup | 96.194 | 28.519 | 76.959 | 28.914 | 27.942 | 28.832 |
+| G2 multiply | 224.775 | 93.592 | 173.181 | 92.750 | 68.247 | 94.170 |
+| map G2 | 275.290 | 79.920 | 227.142 | 80.825 | 86.363 | 81.829 |
+
+### G1 MSM
+
+Times are µs per operation, using distinct random subgroup points and full-width scalars. Component MSM excludes the precompile's parsing, validation and output encoding.
+
+| Operation (µs) | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
+|---|---:|---:|---:|---:|---:|---:|
+| G1 MSM 1 | 173.065 | 66.188 | 99.714 | 66.379 | 37.451 | 66.657 |
+| G1 MSM 2 | 282.670 | 83.660 | 160.583 | 85.433 | 60.768 | 86.240 |
+| G1 MSM 4 | 451.517 | 124.967 | 247.000 | 126.367 | 94.723 | 126.810 |
+| G1 MSM 8 | 767.900 | 207.267 | 414.143 | 207.400 | 160.111 | 210.267 |
+| G1 MSM 16 | 1466.550 | 385.550 | 790.700 | 386.067 | 305.617 | 388.650 |
+| G1 MSM 32 | 2449.400 | 606.400 | 1369.200 | 617.000 | 535.100 | 615.460 |
+| G1 MSM 64 | 4186.300 | 981.700 | 2277.500 | 989.500 | 906.300 | 999.633 |
+| G1 MSM 128 | 7227.500 | 1659.600 | 3857.500 | 1648.500 | 1525.400 | 1645.300 |
+| G1 MSM 256 | 9405.100 | 2872.200 | 5631.200 | 2839.500 | 2605.800 | 2812.200 |
+| G1 MSM 512 | 16021.400 | 4815.200 | 9329.100 | 4799.800 | 4276.100 | 4794.900 |
+| G1 MSM 1024 | 30925.000 | 8541.200 | 17934.500 | 8494.700 | 7867.900 | 8471.300 |
+| G1 MSM 2048 | 53270.800 | 14997.800 | 30849.700 | 15071.000 | 13407.800 | 15088.900 |
+| G1 MSM 4096 | 94279.500 | 26949.000 | 54152.200 | 27005.600 | 23650.500 | 27387.300 |
+
+### G2 MSM
+
+Times are µs per operation under the same conditions.
+
+| Operation (µs) | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
+|---|---:|---:|---:|---:|---:|---:|
+| G2 MSM 1 | 219.954 | 159.869 | 171.524 | 158.600 | 67.175 | 160.173 |
+| G2 MSM 2 | 422.517 | 204.533 | 325.288 | 207.000 | 129.859 | 208.405 |
+| G2 MSM 4 | 760.400 | 312.867 | 578.600 | 315.740 | 230.775 | 320.692 |
+| G2 MSM 8 | 1412.950 | 538.450 | 1068.600 | 534.150 | 429.233 | 541.483 |
+| G2 MSM 16 | 2431.300 | 859.100 | 1792.900 | 864.100 | 738.400 | 873.333 |
+| G2 MSM 32 | 4170.500 | 1738.800 | 2505.500 | 1741.000 | 1091.300 | 1751.600 |
+| G2 MSM 64 | 7298.500 | 2815.800 | 4095.500 | 2867.900 | 1716.900 | 2836.800 |
+| G2 MSM 128 | 12502.700 | 4717.500 | 6882.700 | 4719.000 | 2951.200 | 4734.800 |
+| G2 MSM 256 | 21965.400 | 8126.100 | 12098.000 | 8116.700 | 5153.300 | 8199.600 |
+| G2 MSM 512 | 40450.700 | 13891.200 | 21007.000 | 13691.500 | 8834.700 | 13889.800 |
+| G2 MSM 1024 | 71599.100 | 24347.200 | 38191.100 | 24153.700 | 15940.000 | 24209.800 |
+| G2 MSM 2048 | 132420.700 | 43817.700 | 70756.300 | 43312.000 | 29340.600 | 43025.700 |
+| G2 MSM 4096 | 228071.900 | 77861.600 | 128148.900 | 78293.800 | 53344.300 | 77442.300 |
+
+Patched component results still have gaps: maps, cyclotomic square and the single-pair Miller loop can trail their native reference. Exported native calls include ABI overhead; native internal calls can have lower costs. Scratch traffic, call boundaries and register allocation remain plausible causes after matching or reducing the source product counts. This attribution is an inference from disassembly and measured variants, not a hardware-counter profile. Precompile wins do not imply universal kernel parity.
+
+## Kernel policy
+
+`Fp.UseExpandedKernels` follows the executing runtime: compact on .NET 10, expanded on .NET 11 and later, including a net10.0 assembly on the patched host. Expanded mode selects symmetric square, expanded raw products/reducers and the three-product/two-reduction Fp2 multiplier. Compact Fp2 multiplication uses three CIOS calls. Small inlineable dispatchers select isolated implementations; optimized callers fold the initialized readonly policy and remove the unused branch.
+
+Set the AppContext switch `Nethermind.Crypto.BlsNet.UseExpandedKernels` before first field use, or set `BLSNET_EXPANDED_KERNELS` before process startup (`0`/`1`, or case-insensitive `false`/`true`). AppContext takes precedence; invalid environment values use the runtime default. Selection is fixed after initialization. Expanded Fp2 is slower on stock .NET 10, so forcing it is a test option. G2 batch-affine MSM also follows this policy. Thresholds count effective points after splitting: G1 starts at 512 in either mode; G2 starts at 128 in expanded mode and keeps XYZZ in compact mode. See [design](design.md#multi-scalar-multiplication).
+
+## Measurement method and caveats
+
+Field loops warm for at least 0.5 s, then take the best of seven rounds of 1,000,000 independent operations (30,000 for inversion). Tiering is disabled and logical processor 11 is selected. Native field imports use `SuppressGCTransition`. Large inline kernels have separate benchmark methods so unrelated cases do not consume their JIT analysis budgets.
+
+Algorithm loops warm for at least 0.5 s and use best-of-21 samples on logical processor 3, with tiering disabled. Tower rounds use 1,000 iterations and pairing rounds use 10. Curve rounds calibrate toward 3 ms, with at least one iteration. Native and managed share inputs and loop shapes; native MSM scratch and pointer arrays are reused outside timing. Algorithm-native imports include their P/Invoke overhead. Stock .NET 10 uses net10.0 runners; stock .NET 11 and patched algorithm captures use net11.0 runners. The field capture uses net10.0 on stock .NET 10/patched and net11.0 on stock .NET 11.
+
+Builds, tests and measurement processes run sequentially. These component values are best samples, not statistical means or confidence intervals. Shared VM clock/cache contention makes differences of a few percent weak evidence. Interleaved kernel repeats put Fp square at about native parity and Fp2 square about 5.6% slower; a single noisy capture is insufficient to claim a small improvement. Managed kernel/tower loops report zero allocations, and warmed curve/MSM allocation checks pass; initial pool use and complete precompile output allocations are separate costs.
+
+## Reproduction
+
+Use the .NET 11 SDK selected by `global.json`. Build the optional native reference with test-only Fp6 exports when reproducing tower rows. [`scripts/blst-tower.c`](../scripts/blst-tower.c) exposes those formulas.
+
+```powershell
+./scripts/build-native-blst.ps1 -TowerBenchmarks
+dotnet build Nethermind.Crypto.BlsNet.slnx -c Release
+dotnet build Nethermind.Crypto.BlsNet.slnx -c Release -p:BlsNetTestTargetFramework=net10.0
+
+dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release
+dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -f net11.0 -- --bench
+dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0 -- --perf
+dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0 -- --kernel-timing
+```
+
+These are console runners; use `dotnet run`, not `dotnet test`. The test projects default to net11.0; `-p:BlsNetTestTargetFramework=net10.0` builds the .NET 10 runners. Changing only the launcher does not retarget an assembly. Without native blst, managed checks and timings still run and native comparisons print `SKIP`.
+
+[`scripts/test-field-runtime-matrix.ps1`](../scripts/test-field-runtime-matrix.ps1) builds both targets and runs all three suites, kernel tests and cold Fp2/square checks sequentially in both modes on every compatible runtime. `-Timings` adds kernel timing sweeps; `-Cpu` sets kernel affinity through `KERNEL_CPU`.
+
+```powershell
+./scripts/test-field-runtime-matrix.ps1 `
+  -SdkDotnet '<dotnet11>/dotnet.exe' `
+  -Stock10Dotnet 'C:/Program Files/dotnet/dotnet.exe' `
+  -Stock11Dotnet '<dotnet11>/dotnet.exe' `
+  -PatchedDotnet '<testhost>/dotnet.exe' -Cpu 11 -Timings
+
+$env:DOTNET_ROLL_FORWARD = 'Major'
+$env:DOTNET_TieredCompilation = '0'
+$env:BLST_BENCH_PROCESSOR = '3'
+$env:BLST_BENCH_ROUND_MS = '3'
+$env:BLST_BENCH_FILTER = 'Miller|Pairing|Fp12'
+& '<testhost>/dotnet.exe' tests/Nethermind.Crypto.BlsNet.PairingTests/bin/Release/net10.0/Nethermind.Crypto.BlsNet.PairingTests.dll --perf
+```
+
+`BLST_BENCH_PROCESSOR` optionally pins the curve and tower/pairing runners on Windows. `BLST_BENCH_ROUND_MS` selects shorter rounds and best-of-21 sampling; curves calibrate to that many milliseconds. Pairing short rounds use 1,000 tower iterations and 10 pairing iterations. Warmup remains at least 0.5 s. `BLST_BENCH_FILTER` selects names containing any `|`-separated string, case-insensitively, without changing generated inputs. Unset it for complete tables. `BLST_MSM_SIZES` accepts comma-separated sizes for curve sweeps. Kernel timings use `KERNEL_CPU` and the optional substring `KERNEL_FILTER` instead. Clear overrides before correctness suites.
+
+### Integration benchmarks
+
+The Nethermind integration branch is not published yet. Reproducing precompile means requires that integration and its benchmark inputs. It links `src/Nethermind.Crypto.BlsNet/**/*.cs`, excluding `bin/` and `obj/`, into a net10.0 library project. Managed precompiles keep Nethermind's parsing, validation and output encoding; scalar byte order and padded coordinates are converted in that layer. Register `ManagedBls12381*Benchmark` beside `Bls12381*Benchmark`.
+
+From the integrated Nethermind source tree:
 
 ```powershell
 dotnet run --project src/Nethermind/Nethermind.Benchmark.Runner -c Release -- --filter '*Bls12381*' --job Short --inProcess
 ```
 
-Build with `BlsNetSource` set to the library source directory if the linked project needs a path override. Run the same built runner and filter under the patched runtime, using `DOTNET_ROOT` and `DOTNET_ROLL_FORWARD=Major` as below. Include native benchmarks in both runs. The in-process toolchain is required to measure the runtime that launches the runner. The filter also includes managed variants. Record the executing runtime, target framework and any `BLSNET_EXPANDED_KERNELS` override: field kernels and the G2 batch-affine threshold now follow runtime policy.
+Set `BlsNetSource` to the library source directory if needed. Run the same built runner under the patched host with `DOTNET_ROOT` pointing to its testhost and `DOTNET_ROLL_FORWARD=Major`. Include native benchmarks in both runs. The in-process toolchain measures the launcher runtime. Record the executing runtime, target and kernel override. Component best-round values and BenchmarkDotNet means are separate measurements.
 
-## Component measurements
+### Building the experimental runtime
 
-The [field-kernel follow-up report](field-kernel-report.md) records newer before/after kernel timings, complete disassembly counts and stress validation. It reduces patched Fp2 multiplication to three raw products and two Montgomery reductions, eliminates carry materialization in the captured field kernels, and preserves compact stock .NET 10 kernels. The [round 2 report](field-kernel-round2-report.md) replaces framework selection with a folded runtime policy and records both modes on both library targets, further kernel experiments, and the RDX-copy JIT change. The historical component tables below precede that follow-up. They do not measure the later tower/curve work in other checkouts.
-
-The following tables retain the latest implementation follow-up measurements. They use stock .NET 10.0.12, stock .NET 11 RC1 and the patched launcher identifying itself as .NET 12.0.0-dev. Each native column comes from the same runtime and loop shape as its managed counterpart. These are warmed best-of-round component timings, measured separately from the BenchmarkDotNet precompile means. Input construction, validation, conversion and harness costs differ, so the two sets should not be compared as identical operations. Shared-host contention limits small comparisons.
-
-### Field operations
-
-| Operation | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
-|---|---:|---:|---:|---:|---:|---:|
-| Fp multiply | 53.16 ns | 21.17 ns | 52.56 ns | 21.01 ns | 20.32 ns | 20.97 ns |
-| Fp square | 53.19 ns | 21.61 ns | 52.67 ns | 21.27 ns | 20.72 ns | 21.18 ns |
-| Fp inverse | 1.936 µs | 1.362 µs | 1.772 µs | 1.401 µs | 1.359 µs | 1.404 µs |
-| Fp2 multiply | 191.63 ns | 64.47 ns | 189.87 ns | 63.67 ns | 78.78 ns | 64.02 ns |
-
-Binary-GCD inversion is about 27× faster than Fermat on .NET 10, 19× on .NET 11 and 16× on the patched runtime in these runs. The Fp square native reference in this historical table is `blst_fp_mul(a, a)`. The follow-up kernel runner uses the dedicated `blst_fp_sqr` entry point and also measures `blst_fp2_sqr`.
-
-### Extension tower
-
-| Operation | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
-|---|---:|---:|---:|---:|---:|---:|
-| Fp12 multiply | 3.562 µs | 1.193 µs | 3.378 µs | 1.214 µs | 1.752 µs | 1.204 µs |
-| Fp12 square | 2.652 µs | 0.874 µs | 2.475 µs | 0.863 µs | 1.233 µs | 0.871 µs |
-
-The earlier matched tower run also measured cyclotomic square: managed .NET 11 1.530 µs versus blst 0.517 µs, and managed patched 0.676 µs versus blst 0.509 µs. A matching .NET 10 measurement was not reported. This earlier run used a different capture; its values should not be merged with the latest table as one measurement.
-
-### Pairing
-
-| Operation | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
-|---|---:|---:|---:|---:|---:|---:|
-| Miller 1 | 508.825 µs | 155.305 µs | 448.956 µs | 154.585 µs | 219.070 µs | 155.152 µs |
-| Miller 8 | 2844.978 µs | 850.385 µs | 2542.886 µs | 869.286 µs | 1213.107 µs | 869.722 µs |
-| Final exponentiation | 732.517 µs | 209.575 µs | 634.132 µs | 210.209 µs | 285.962 µs | 212.982 µs |
-| Pairing check 1 | 1222.481 µs | 365.932 µs | 1096.583 µs | 369.095 µs | 501.583 µs | 369.272 µs |
-| Pairing check 2 | 1622.740 µs | 463.449 µs | 1423.978 µs | 475.302 µs | 648.168 µs | 471.365 µs |
-| Pairing check 8 | 3584.570 µs | 1168.589 µs | 3212.342 µs | 1093.758 µs | 1494.303 µs | 1087.320 µs |
-
-The tower/pairing harness warms each operation for at least 0.5 s and takes the best of seven rounds. Arithmetic rounds run 30,000 iterations; pairing rounds run 250. Inputs are deterministic. Native full checks combine `blst_miller_loop_n`, `blst_final_exp` and the same `IsOne` comparison. Measured managed loops allocate zero heap bytes.
-
-### Curve operations
-
-The curve harness also warms for at least 0.5 s and takes the best of seven rounds with deterministic inputs. Managed and native use the same Action/Stopwatch loop shape. Native MSM scratch memory and pointer arrays are reused outside measurement. Map and scalar multiplication timings include projective output; add + affine includes affine conversion. Values below are the final values from the latest before/after sweep, in µs per operation.
-
-| Operation | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
-|---|---:|---:|---:|---:|---:|---:|
-| G1 add+affine | 3.938 | 1.862 | 2.879 | 1.772 | 1.815 | 1.761 |
-| G1 subgroup | 120.916 | 25.484 | 69.423 | 24.487 | 27.810 | 24.266 |
-| G1 multiply | 199.464 | 48.010 | 113.116 | 46.719 | 46.093 | 46.072 |
-| map G1 | 102.887 | 23.723 | 70.265 | 23.170 | 27.815 | 23.110 |
-| G2 add+affine | 6.286 | 2.759 | 5.526 | 2.656 | 2.902 | 2.623 |
-| G2 subgroup | 99.448 | 30.097 | 84.413 | 29.039 | 36.661 | 28.702 |
-| G2 multiply | 327.485 | 97.123 | 286.195 | 96.061 | 121.709 | 93.358 |
-| map G2 | 289.441 | 83.337 | 254.424 | 82.016 | 107.201 | 80.829 |
-
-### MSM sweep
-
-Values are µs per operation. Warmed single multiplication and MSM allocate zero heap bytes at the checked sizes; initial pool use can allocate. n = 1 uses scalar multiplication, n < 32 uses signed width-4 tables, and larger inputs use Pippenger. The historical captures used a framework-dependent G2 threshold. Current batch-affine buckets begin at n = 512 for G1 and n = 128 for G2 in expanded mode. Compact mode retains XYZZ G2 buckets at all sizes; both modes are selected by the executing runtime. See [design](design.md#multi-scalar-multiplication).
-
-#### G1
-
-| Operation | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
-|---|---:|---:|---:|---:|---:|---:|
-| G1 MSM 1 | 191.693 | 69.003 | 110.761 | 66.875 | 45.582 | 67.468 |
-| G1 MSM 2 | 382.189 | 87.917 | 219.741 | 85.605 | 88.679 | 84.505 |
-| G1 MSM 4 | 555.669 | 131.669 | 315.224 | 128.189 | 126.878 | 126.839 |
-| G1 MSM 8 | 886.168 | 220.844 | 488.845 | 211.712 | 197.845 | 211.239 |
-| G1 MSM 16 | 1561.328 | 407.137 | 862.360 | 392.318 | 349.820 | 388.940 |
-| G1 MSM 32 | 3088.516 | 645.495 | 1723.362 | 619.909 | 712.519 | 620.333 |
-| G1 MSM 64 | 4957.169 | 1033.869 | 2807.019 | 1007.620 | 1153.958 | 1007.572 |
-| G1 MSM 128 | 8292.016 | 1722.897 | 4648.978 | 1664.019 | 1890.784 | 1648.769 |
-| G1 MSM 256 | 14143.044 | 2960.794 | 8076.675 | 2863.938 | 3247.812 | 2810.113 |
-| G1 MSM 512 | 18738.825 | 4969.288 | 10823.025 | 4846.775 | 5089.500 | 4780.688 |
-| G1 MSM 1024 | 31618.650 | 8784.300 | 17850.950 | 8545.350 | 8219.600 | 8457.500 |
-| G1 MSM 2048 | 55334.200 | 15569.000 | 31281.950 | 15184.550 | 13938.150 | 15092.300 |
-| G1 MSM 4096 | 96916.000 | 27940.700 | 54897.100 | 27290.900 | 24394.700 | 27144.000 |
-
-#### G2
-
-| Operation | Managed .NET 10 | blst .NET 10 | Managed .NET 11 | blst .NET 11 | Managed patched | blst patched |
-|---|---:|---:|---:|---:|---:|---:|
-| G2 MSM 1 | 328.941 | 163.267 | 282.602 | 161.952 | 120.589 | 161.957 |
-| G2 MSM 2 | 694.040 | 212.596 | 583.282 | 209.991 | 255.181 | 208.612 |
-| G2 MSM 4 | 1015.791 | 331.770 | 859.941 | 326.929 | 367.993 | 319.791 |
-| G2 MSM 8 | 1671.307 | 554.335 | 1426.240 | 544.695 | 607.620 | 541.157 |
-| G2 MSM 16 | 2957.365 | 899.648 | 2560.842 | 900.792 | 1083.604 | 875.924 |
-| G2 MSM 32 | 6122.801 | 1825.011 | 5327.488 | 1780.047 | 2298.349 | 1763.847 |
-| G2 MSM 64 | 9928.384 | 2938.973 | 8581.144 | 2877.908 | 3699.581 | 2858.889 |
-| G2 MSM 128 | 16636.866 | 4972.056 | 11528.797 | 4747.822 | 5472.484 | 4852.884 |
-| G2 MSM 256 | 27768.812 | 8229.094 | 18488.606 | 8129.962 | 8453.531 | 8259.081 |
-| G2 MSM 512 | 47159.338 | 14003.612 | 32211.213 | 14072.138 | 13888.475 | 13912.513 |
-| G2 MSM 1024 | 85078.100 | 24989.375 | 52785.350 | 24335.350 | 23205.025 | 24244.425 |
-| G2 MSM 2048 | 148462.900 | 43705.050 | 92788.400 | 43337.800 | 40481.400 | 43039.950 |
-| G2 MSM 4096 | 267497.400 | 79657.400 | 163603.400 | 77388.900 | 72540.300 | 77217.300 |
-
-In this component sweep, patched G1 MSM is faster than blst at n ≥ 1,024; n = 64–512 takes about 1.06–1.16× blst's time. Patched G2 MSM is faster at n ≥ 256; n = 64 and 128 take about 1.29× and 1.13×. At n = 4,096, the follow-up reduced patched G1 from 32.4 ms to 24.4 ms and G2 from 103.7 ms to 72.5 ms. Stock .NET 11 improved from 78.3 ms to 54.9 ms for G1 and 243.0 ms to 163.6 ms for G2. Stock .NET 10 improved from 164.4 ms to 96.9 ms for G1 and 285.8 ms to 267.5 ms for G2.
-
-### Running the component runners
-
-Use the .NET 11 SDK selected by `global.json`:
+In a separate dotnet/runtime source tree, fetch PR #134039, check out `331fa2b3`, apply [`carry-rows.patch`](../jit/carry-rows.patch), then build and run the existing benchmark assembly:
 
 ```powershell
-dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release
-dotnet run --project tests/Nethermind.Crypto.BlsNet.CurveTests -c Release -f net11.0 -- --bench
-dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0 -- --timing
-dotnet run --project tests/Nethermind.Crypto.BlsNet.PairingTests -c Release -f net11.0 -- --kernel-timing
-```
-
-The test projects default to net11.0. Build the net10.0 runners with `dotnet build Nethermind.Crypto.BlsNet.slnx -c Release -p:BlsNetTestTargetFramework=net10.0`; changing only the launcher does not retarget the assembly. `scripts/test-field-runtime-matrix.ps1` builds both targets and runs all three suites, kernel tests and optional timing sweeps sequentially, with both kernel modes on every compatible runtime. Native comparisons require the optional reference build described in the [README](../README.md#build-and-test). Without it, managed timings still run and native columns are skipped.
-
-On a shared Windows host, `BLST_BENCH_PROCESSOR` optionally pins the runners to one logical processor. `BLST_BENCH_ROUND_MS` enables shorter arithmetic/curve rounds and best-of-21 sampling to reduce scheduler interruptions; default runner settings retain the historical best-of-seven mode. Curve rounds adapt their iteration count toward the supplied millisecond duration. Pairing short rounds use 1,000 tower iterations and 10 pairing iterations, with the same counts for native and managed operations. Warmup remains at least 0.5 seconds per operation.
-
-`BLST_BENCH_FILTER` optionally selects operation names containing any of its `|`-separated strings, case-insensitively. It filters measurements without changing input generation. Unset it for the full tables, including the two-line sparse-product comparison.
-
-## Kernel and JIT details
-
-The `mul+add` benchmarks (`acc = acc * a + b`, 1,000,000 dependent iterations; the runner
-reports the best of 7 rounds, the table the best of five interleaved runs) on a Ryzen 9
-9950X3D, in ns per iteration; runs vary by about 5% on this machine:
-
-| Kernel     | .NET 11 RC1 | #134039 | #134039 + patch | blst (ADX) via P/Invoke | blst (ADX), C loop |
-|------------|------------:|--------:|----------------:|------------------------:|-------------------:|
-| Fr mul+add |        26.4 |    17.7 |            10.9 |                    12.1 |               11.9 |
-| Fp mul+add |        56.7 |    33.8 |            19.8 |                    20.4 |               20.4 |
-
-The native columns call blst's MULX/ADCX/ADOX assembly, through `[SuppressGCTransition]`
-imports and from a C loop over `libblst.a`. Without ADX (blst's MULQ assembly) that C loop
-takes 13.2 and 24.8 ns. The `#134039` columns are the carry-aware JIT described below,
-without and with the patch. With the patch the managed loop was faster in every run,
-by 8-10% for Fr and 2-4% for Fp. Multiplication alone is at parity for Fp (18.7 ns against
-18.6 in C) and about 7% faster for Fr (9.8 against 10.6); the rest comes from the addition,
-which the JIT inlines and reduces with `cmov` while blst calls a function. The numbers are
-for this isolated loop; code that inlines many more operations into one method can exceed
-the JIT budgets below.
-
-The older disassembly capture described MUL lowering for `Math.BigMul`. The latest
-.NET 10/11 kernel captures use MULX, but still materialize carries with compare/`setb`/`movzx`
-and registers rather than dual ADCX/ADOX chains. MULX alone does not close the 2–3× field gap. The kernels are written in carry idioms that a carry-aware JIT turns into `adc`/`sbb`
-and MULX/ADCX/ADOX chains:
-
-- multiply-accumulate: `hi = Math.BigMul(m, x, out lo); lo += t; hi += lo < t ? 1 : 0; lo += c; hi += lo < c ? 1 : 0;`
-  with the multiplier shared by a row of products first (MULX takes it in RDX);
-- add with carry: `s = a + b; c1 = s < a ? 1 : 0; r = s + carry; carry = c1 + (r < s ? 1 : 0);`
-- subtract with borrow: `d = a - b; b1 = d > a ? 1 : 0; r = d - borrow; borrow = b1 + (r > d ? 1 : 0);`
-- the final conditional subtraction adds `2^n - modulus`, whose carry out means "not below the modulus".
-
-The historical measurements used the experimental [dotnet/runtime#134039](https://github.com/dotnet/runtime/pull/134039),
-which recognizes the add/subtract idioms and BigInteger-style multiply-accumulate loops, at
-`331fa2b3` plus [`carry-rows.patch`](../jit/carry-rows.patch), which:
-
-- keeps CF and OF across the rows of a Montgomery multiplication, the `MulAdd` shape above
-  (several rows per block, rows of any width, the shorter first lanes of CIOS rows);
-- lets loads, `lea`, non-zero constants and casts sit between a carry and its consumer;
-- turns the constant-time select `t ^ ((t ^ s) & (0 - carry))` after a carry or borrow chain
-  into `cmov`s that read the chain's flags, so the final conditional subtraction no longer
-  turns the carry into a mask (`setb; movzx; neg`, then `xor; and; xor` per limb, all on the
-  critical path);
-- keeps following a carry to its single consumer in large blocks, where the PR's scan gave up
-  after 64 nodes and left the last limb of a long chain going through a register;
-- also optimizes OSR methods, whose Tier0 frame can only hold root-method locals, not carry temporaries.
-
-The PR skips methods with exception handling and gives up on full adders in methods larger
-than 2,048 IR nodes. A fully unrolled 6-limb row loop exceeds that budget, so `Fp.Multiply`
-keeps a loop over rows, two rows per iteration: the twelve live words leave few spare
-registers, and each back edge costs register shuffles (about 4% of an Fp mul+add; on the
-stock .NET 11 RC1 JIT the two-row loop is about 1% slower).
-
-To reproduce, use a separate dotnet/runtime checkout at `<runtime>` and this repository at `<BlsNet>`. Build the library benchmark with the .NET 11 SDK first, then build the experimental runtime and run that assembly on its testhost:
-
-```powershell
-dotnet build '<BlsNet>/benchmarks/Nethermind.Crypto.BlsNet.Benchmarks' -c Release
 git -C '<runtime>' fetch https://github.com/dotnet/runtime pull/134039/head
 git -C '<runtime>' checkout 331fa2b3
 git -C '<runtime>' apply '<BlsNet>/jit/carry-rows.patch'
 Push-Location '<runtime>'
 try { ./build.cmd clr+libs -c Release } finally { Pop-Location }
-$env:DOTNET_ROLL_FORWARD = "Major"
-$env:DOTNET_ROOT = "<runtime>/artifacts/bin/testhost/net11.0-windows-Release-x64"
+$env:DOTNET_ROLL_FORWARD = 'Major'
+$env:DOTNET_ROOT = '<runtime>/artifacts/bin/testhost/net11.0-windows-Release-x64'
 & "$env:DOTNET_ROOT/dotnet.exe" '<BlsNet>/benchmarks/Nethermind.Crypto.BlsNet.Benchmarks/bin/Release/net11.0/Nethermind.Crypto.BlsNet.Benchmarks.dll'
 ```
 
-The historical runtime build path above is named `net11.0-windows-Release-x64`; the supplied patched launcher identifies itself as .NET 12.0.0-dev. Use the actual testhost path produced by the runtime build, then run the same built library and runner assemblies under it. These measurements describe the specified PR revision and patch, not a claim about a current released JIT.
+Use the actual testhost directory produced by the runtime build. Its directory can be named net11.0 while the launcher identifies itself as .NET 12.0.0-dev. These measurements describe the specified revision and patch. Patch behavior and regression coverage are in [`jit/README.md`](../jit/README.md).
 
-Compact calls also matter for tower arithmetic. In a patched disassembly capture, the original Tier1 Fp6 multiply occupied 8,248 bytes and still contained 56 `setb` instructions. The final Fp6 wrapper occupied 149 bytes, delegating to wide helpers. `Fp.MultiplyComposite` occupied 1,005 bytes with 24 MULX, 24 ADCX, 28 ADOX and one `setb`; `MultiplyWide` occupied 380 bytes with 6 MULX, 6 ADCX, 7 ADOX and no `setb`. These are static counts from that capture, not throughput estimates.
+## Kernel and JIT details
 
-## Experiments that did not help
+The original dependent `mul+add` loop uses `acc = acc * a + b` for 1,000,000 iterations, best of seven rounds. The table takes the best of five interleaved runs on the Ryzen 9 9950X3D; runs vary by about 5%. Times are ns per iteration. These isolated-loop measurements precede the independent-operation kernel captures above.
 
-- BMI2 output-pointer multiplication and UInt128 accumulation did not improve the CIOS kernel across stock and patched runtimes.
-- A dedicated Comba Fp square, a one-row multiply loop and a non-inlined public multiply were discarded. There is no runtime-dependent field-kernel selector.
-- Fully lazy Fp4/cyclotomic formulas, forced field inlining into Fp2 and alternate tower call boundaries regressed the measured paths.
-- Curve variants with alternate inlining, width-3/5 small MSM tables, adjacent Pippenger windows, Jacobian buckets and batch-affine accumulation below the chosen thresholds did not improve their applicable paths.
-- A radix-48 Montgomery prototype used eight 48-bit limbs and preserved R = 2^384. Its edge and random products matched the references, but conversion, 128-bit column arithmetic and reduction outweighed simpler carry handling. The prototype was removed after its test-only correctness run passed 598,209 assertions.
+| Kernel | .NET 11 RC1 | #134039 | #134039 + patch | blst ADX, P/Invoke | blst ADX, C loop |
+|---|---:|---:|---:|---:|---:|
+| Fr mul+add | 26.4 | 17.7 | 10.9 | 12.1 | 11.9 |
+| Fp mul+add | 56.7 | 33.8 | 19.8 | 20.4 | 20.4 |
 
-The radix-48 experiment recorded these best field times, in ns per operation:
+Native imports suppress the GC transition; the C loop calls `libblst.a`. Without ADX, the native C loop takes 13.2 ns for Fr and 24.8 ns for Fp. In these runs patched managed mul+add is 8–10% faster for Fr and 2–4% for Fp. Multiplication alone is about 18.7 ns versus 18.6 ns for native Fp, and 9.8 ns versus 10.6 ns for Fr. Inlined addition with flag-based selection accounts for part of the loop's lead over native function calls.
 
-| Operation | Stock .NET 10 | Stock .NET 11 | Patched runtime |
-|---|---:|---:|---:|
-| Fp multiply, current | 53.25 | 53.04 | 20.45 |
-| Fp multiply, radix-48 | 187.52 | 182.83 | 131.76 |
-| Fp2 multiply, current | 195.15 | 192.82 | 78.61 |
-| Fp2 multiply, radix-48 | 606.31 | 588.47 | 431.37 |
+The kernels expose multiply-accumulate, add-carry and subtract-borrow idioms. For example, `hi = Math.BigMul(m, x, out lo); lo += t; hi += lo < t ? 1 : 0;` exposes the first carry. Final conditional subtraction adds the radix minus the modulus and selects by carry. The patched JIT retains the carry in flags and folds mask selects to CMOV. MULX alone does not remove stock carry materialization.
 
-The tested .NET 10 and .NET 11 reference packs exposed neither `Avx512Ifma` nor an Avx10 52-bit multiply equivalent. On the tested Ryzen 9 9950X3D, `Avx512F.IsSupported` was true and `Avx10v1.IsSupported` was false. No SIMD IFMA kernel was added. This records the tested CPU/runtime surface; it is not a general statement about future intrinsics or hardware.
+Fp multiplication processes two Montgomery rows per iteration: 24 static widening products execute three times, or 72 per call. Expanded symmetric square uses 57 widening products: 15 cross products, six diagonal products and 36 reduction products. Expanded Fp2 multiplication uses 180 widening products, versus 216 for three CIOS calls. Fp2 square retains two CIOS products, or 144 widening products. Logical field-product counts and static instruction counts are different measures.
 
-Algorithm and calling-pattern details are in [design](design.md). Stock-JIT improvements and platform validation remain on the [roadmap](roadmap.md).
+## Rejected experiments
+
+- Three-row or fully expanded CIOS, one-row multiplication, BMI2 output-pointer and UInt128 accumulation, and forced non-inlined public multiplication did not improve the applicable stock/patched paths.
+- Earlier Comba/cross-product squares, separate diagonal buffers and all-word shift doubling lost to the retained symmetric bit-carry square. Unconditional symmetric square on stock .NET 10 did not establish a curve gain.
+- Fully inlined raw Fp2 products, paired reducers, extra square subtraction inlining, reversed square product order and alternate operand copies increased spills or gave no reliable gain. Public Fp2 subtraction inlining is retained.
+- Fully lazy Fp4/cyclotomic square, alternate tower boundaries and blanket curve-wrapper inlining did not repay their scratch/call costs. Delayed Fp6 square reductions are retained.
+- Width-3/5 small MSM tables, adjacent Pippenger windows, Jacobian buckets and lower batch-affine thresholds did not improve the applicable paths. Small split MSMs require endomorphism-derived tables to avoid rebuilding each image.
+- Radix-48 Montgomery arithmetic passed reference checks but conversion and wide-column costs dominated. No SIMD IFMA kernel was added. Blanket expanded kernels and changed root calls on stock .NET 10 regressed composite paths; compact fallbacks remain.
+
+See [design](design.md) for bounds and algorithms, and [roadmap](roadmap.md) for open work.
