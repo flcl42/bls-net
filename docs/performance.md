@@ -121,6 +121,38 @@ $env:BLST_BENCH_PROCESSOR = '3'
 
 For a fresh baseline use a separate `8dd3cc4` library build and the `0a303c9` JIT. Rebuild after restoring experimental source files: preserved file timestamps can otherwise leave an incremental build stale. Raw experimental captures are ignored local artifacts; the tables above retain the final repeated samples.
 
+## Fixed binary-GCD inverses
+
+Capture: 2026-10-15, Ryzen 9 9950X3D, Windows x64, logical processor 3, expanded kernels, tiering disabled, net11.0 executables on the supplied .NET 12-dev carry-aware host. Before is `3c27b68`; after is `467434d`. Both use the unchanged [JIT follow-up](../jit/README.md) and ADX/BMI2 blst `f62244ef`. Values are **medians of three process-level best samples** from `--quick`, in µs; native columns come from the same processes. Builds, tests and timings ran sequentially.
+
+| Operation | Before | After | blst before | blst after |
+|---|---:|---:|---:|---:|
+| Fp inverse, constant-time | 7.750 | 2.755 | 1.332 | 1.344 |
+| Fp2 inverse, constant-time | 7.797 | 2.870 | 1.412 | 1.407 |
+| Fr inverse, constant-time | 3.790 | 1.482 | 0.774 | 0.773 |
+| G1 to-affine, constant-time | 7.825 | 2.837 | 1.418 | 1.406 |
+| G2 to-affine, constant-time | 8.124 | 3.084 | 1.640 | 1.641 |
+| G1 multiply, constant-time | 53.247 | 53.181 | 46.717 | 46.413 |
+| G2 multiply, constant-time | 116.965 | 116.272 | 95.750 | 94.834 |
+| map G1, constant-time | 22.725 | 22.615 | 23.070 | 23.008 |
+| map G2, constant-time | 81.753 | 81.744 | 81.621 | 82.155 |
+| Fp inverse, variable-time | 1.374 | 1.378 | 1.332 | 1.344 |
+| G1 multiply, variable-time | 36.993 | 37.005 | 46.717 | 46.413 |
+| G2 multiply, variable-time | 67.253 | 66.531 | 95.750 | 94.834 |
+| map G1, variable-time | 22.480 | 22.392 | 23.070 | 23.008 |
+| map G2, variable-time | 80.933 | 81.101 | 81.621 | 82.155 |
+| Pairing check 2 | 430.250 | 431.860 | 454.670 | 447.730 |
+
+Fp/Fp2/Fr constant-time inverses improve by 64.5%/63.2%/60.9%; G1/G2 constant-time affine conversion improves by 63.7%/62.0%. Final inverse times are about 2.05x/2.04x/1.92x their paired native medians. The 31-bit C# port uses fixed signed wide cofactors and blst's correction factor; native ADX can use 62-bit batches and a tighter assembly schedule. No new JIT changes were made. Signed product pairs use MUL/ADC where sign repair prevents a complete multiply-accumulate row; correction and Montgomery rows use the existing MULX/ADX lowering.
+
+Unchanged-operation medians move by -1.1% to +0.4%. The largest paired-native normalized slowdown is about 1.9% for pairing; this capture does not establish a regression at that scale on a shared VM. Maps retain their square-root chains. The measured affine-base multipliers build projective tables without normalization, so the new inverse has little effect on those rows. Existing variable-time inverses, maps, scalar multiplication and pairing implementations are unchanged. All three new inverses allocate zero bytes after warm-up.
+
+The [design and bound](design.md#fixed-binary-gcd-inversion) and [functional/generated-code/timing evidence](constant-time-validation.md) accompany these numbers. Regenerate with processor 3, `DOTNET_TieredCompilation=0`, patched `DOTNET_ROOT`, `DOTNET_ROLL_FORWARD=Major`, and this filter, repeated in three fresh processes for each revision:
+
+```powershell
+& "$env:DOTNET_ROOT/dotnet.exe" '<benchmark DLL>' --quick --filter 'CT |Fp inverse|G1 multiply|G2 multiply|map G|Pairing check 2'
+```
+
 ## Constant-time components
 
 Capture: 2026-10-15, Ryzen 9 9950X3D, Windows x64, logical processor 3, tiering disabled. Stock hosts are .NET 10.0.12 (net10.0, compact) and .NET 11.0.0-rc.1.26425.128 (net11.0, expanded). The supplied patched net11.0 testhost identifies itself as .NET 12.0.0-dev (expanded), runtime checkout `331fa2b32a9c1cbfe1c6b377c5d436b3e04ceb44`. Native uses the supplied ADX/BMI2 blst reference. Rows use the same inputs for all three implementations within a process. Each cell is **constant-time / variable-time / blst**, in µs.
@@ -137,7 +169,7 @@ Capture: 2026-10-15, Ryzen 9 9950X3D, Windows x64, logical processor 3, tiering 
 | Map G1 | 107.859 / 104.302 / 23.894 | 66.214 / 64.882 / 23.584 | 25.619 / 25.163 / 23.796 |
 | Map G2 | 299.506 / 299.683 / 85.158 | 238.597 / 237.385 / 85.352 | 89.451 / 85.959 / 82.573 |
 
-Fr has no original variable-time inverse API. `SecretBenchmarks` warms each comparison for 0.5 seconds and takes the best of 21 rounds calibrated toward 10 ms each. Inverse/map inputs are fixed nontrivial field values; multiplication uses mapped points and a deterministic scalar reduced modulo r before timing. The managed constant-time multiply still performs its own fixed reduction inside timing. Canonical nonzero scalars keep the pinned native `blst_p1_mult`/`blst_p2_mult` on their GLV/GLS paths: those exports branch to a fallback for noncanonical/zero scalars. Edge-input differential tests also exercise those fallbacks. Native inverses use blst's safegcd path; native to-affine uses its reciprocal path. The managed fixed-chain reciprocal is deliberately retained as a simple baseline and is substantially slower. A safegcd replacement needs its own proof of bounds, verification and measurements.
+Fr has no original variable-time inverse API. `SecretBenchmarks` warms each comparison for 0.5 seconds and takes the best of 21 rounds calibrated toward 10 ms each. Inverse/map inputs are fixed nontrivial field values; multiplication uses mapped points and a deterministic scalar reduced modulo r before timing. The managed constant-time multiply still performs its own fixed reduction inside timing. Canonical nonzero scalars keep the pinned native `blst_p1_mult`/`blst_p2_mult` on their GLV/GLS paths: those exports branch to a fallback for noncanonical/zero scalars. Edge-input differential tests also exercise those fallbacks. Native inverses use blst's safegcd path; native to-affine uses its reciprocal path. This historical capture used the Fermat reciprocal baseline. The current fixed binary-GCD replacement is measured [above](#fixed-binary-gcd-inverses).
 
 In the earlier constant-time API capture below, the original public-input bodies were preserved. It uses their original benchmark inputs and quick harness; values are µs except the first two rows, which are ns. At that revision, existing production files only gained `partial` declarations and documentation. The subsequent fused-map changes are measured separately above.
 
