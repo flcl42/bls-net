@@ -3,9 +3,9 @@ using Nethermind.Crypto.BlsNet.Arithmetic;
 
 namespace Nethermind.Crypto.BlsNet.Curves;
 
-/// <summary>A G2 point in Jacobian coordinates. Arithmetic is variable-time.</summary>
+/// <summary>A G2 point in Jacobian coordinates. See individual methods for timing contracts.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public struct G2Projective
+public partial struct G2Projective
 {
     internal Jacobian<Fp2> Value;
     public Fp2 X { readonly get => Value.X; set => Value.X = value; }

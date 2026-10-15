@@ -3,9 +3,9 @@ using Nethermind.Crypto.BlsNet.Arithmetic;
 
 namespace Nethermind.Crypto.BlsNet.Curves;
 
-/// <summary>A G1 point in Jacobian coordinates. Arithmetic is variable-time.</summary>
+/// <summary>A G1 point in Jacobian coordinates. See individual methods for timing contracts.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public struct G1Projective
+public partial struct G1Projective
 {
     internal Jacobian<Fp> Value;
     public Fp X { readonly get => Value.X; set => Value.X = value; }

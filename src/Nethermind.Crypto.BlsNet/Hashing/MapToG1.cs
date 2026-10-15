@@ -5,8 +5,8 @@ using static Nethermind.Crypto.BlsNet.Hashing.MapConstants1;
 
 namespace Nethermind.Crypto.BlsNet.Hashing;
 
-/// <summary>SSWU mapping to G1. All operations are variable-time.</summary>
-public static class MapToG1
+/// <summary>SSWU mapping to G1.</summary>
+public static partial class MapToG1
 {
     /// <summary>Maps one field element, matching blst_map_to_g1(u, NULL); variable-time.</summary>
     public static void Map(in Fp u, out G1Projective r)

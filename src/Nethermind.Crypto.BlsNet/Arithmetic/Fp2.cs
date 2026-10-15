@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace Nethermind.Crypto.BlsNet.Arithmetic;
 
 /// <summary>Fp2 = Fp[u] / (u^2 + 1), as C0 + C1*u.</summary>
-public struct Fp2 : IEquatable<Fp2>, IField<Fp2>
+public partial struct Fp2 : IEquatable<Fp2>, IField<Fp2>
 {
     public Fp C0;
     public Fp C1;

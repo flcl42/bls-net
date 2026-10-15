@@ -3,6 +3,8 @@ using Nethermind.Crypto.BlsNet.Arithmetic;
 
 internal static class KernelNative
 {
+    [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_inverse(out Fp2 r, in Fp2 a);
+    [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fr_inverse(out Fr r, in Fr a);
     [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fr_mul(out Fr r, in Fr a, in Fr b);
     [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fr_add(out Fr r, in Fr a, in Fr b);
     [DllImport("blst"), SuppressGCTransition] internal static extern void blst_fp2_add(out Fp2 r, in Fp2 a, in Fp2 b);

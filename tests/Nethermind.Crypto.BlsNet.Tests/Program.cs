@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
-string[] allowed = ["--compact-kernels", "--expanded-kernels", "--no-native", "--kernel-cold-start", "--square-cold-start", "--kernel-policy"];
+string[] allowed = ["--compact-kernels", "--expanded-kernels", "--no-native", "--kernel-cold-start", "--square-cold-start", "--kernel-policy", "--constant-time-only", "--constant-time-audit", "--constant-time-audit-warm"];
 if (args.Contains("--help")) { Console.WriteLine("Options: " + string.Join(" ", allowed)); return; }
 if (args.Any(a => !allowed.Contains(a)) || args.Contains("--compact-kernels") && args.Contains("--expanded-kernels"))
     throw new ArgumentException("Options: " + string.Join(" ", allowed) + "; choose at most one kernel policy.");
@@ -17,9 +17,12 @@ if (diagnostic is not null)
     return;
 }
 Console.WriteLine($"Field kernels: {(Fp.UseExpandedKernels ? "expanded" : "compact")}");
+if (args.Contains("--constant-time-audit") || args.Contains("--constant-time-audit-warm")) { ConstantTimeAudit.Run(args.Contains("--constant-time-audit-warm")); return; }
+int secret = ConstantTimeTests.Run(native);
+if (args.Contains("--constant-time-only") || args.Contains("--constant-time-audit")) return;
 Console.WriteLine("Arithmetic");
 int arithmetic = ArithmeticTests.Run();
 Console.WriteLine($"Arithmetic: {arithmetic:N0} checks.");
 int tower = TowerTests.Run(native, null);
 int curves = CurveTests.Run(native);
-Console.WriteLine($"PASS: {arithmetic + tower + curves:N0} total checks.");
+Console.WriteLine($"PASS: {secret + arithmetic + tower + curves:N0} total checks.");

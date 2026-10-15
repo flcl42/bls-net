@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace Nethermind.Crypto.BlsNet.Arithmetic;
 
 /// <summary>BLS12-381 scalar field element stored in Montgomery form.</summary>
-public readonly struct Fr : IEquatable<Fr>
+public readonly partial struct Fr : IEquatable<Fr>
 {
     public const int ByteCount = 32;
     private const ulong N0 = 0xfffffffeffffffffUL;
@@ -362,7 +362,7 @@ public readonly struct Fr : IEquatable<Fr>
         limbs[3] = _l3;
     }
 
-    // Subtracts the modulus from a value in [0, 2r) unless the value is already below it.
+    // One conditional subtraction for any 256-bit integer. Canonicalizes inputs in [0, 2r).
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void Reduce(out Fr result, ulong t0, ulong t1, ulong t2, ulong t3)
     {

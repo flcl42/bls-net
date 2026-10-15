@@ -4,7 +4,7 @@ using Nethermind.Crypto.BlsNet.Arithmetic;
 namespace Nethermind.Crypto.BlsNet.Curves;
 
 /// <summary>Jacobian coordinates for a curve with a = 0. Arithmetic is variable-time.</summary>
-public struct Jacobian<T> where T : struct, IField<T>
+public partial struct Jacobian<T> where T : struct, IField<T>
 {
     public T X, Y, Z;
     public readonly bool IsInfinity => T.EqualsZero(Z);
