@@ -110,15 +110,32 @@ internal static class InverseTests
     private static void Model(BigInteger input, BigInteger m, int bits)
     {
         BigInteger a = input, b = m, u = 1, v = 0;
-        int batches = bits == 384 ? 24 : 15, elapsed = 0;
+        int batches = bits == 384 ? 23 : 15, elapsed = 0;
         for (int batch = 0; batch < batches; batch++)
         {
             long oldLength = a.GetBitLength() + b.GetBitLength();
+            if (bits == 384 && batch >= 19) Check(input.IsZero || a.GetBitLength() <= 191 && b.GetBitLength() <= 191, "191-bit gcd operands");
+            Check(BigInteger.Abs(u) <= m, "blst narrow u bound");
+            Check(BigInteger.Abs(v) <= m || a.IsZero, "wide v only after convergence");
+            Check(BigInteger.Abs(u) < BigInteger.One << (bits + 63), "narrow u input");
+            Check((v >> (bits + 63)).IsZero || (v >> (bits + 63)) == -1 || batch > (bits == 384 ? 11 : 8), "narrow v input");
             int length = (int)BigInteger.Max(a, b).GetBitLength();
             ulong aa = length < 64 ? (ulong)a : (ulong)(a & 0x7fffffff) | (ulong)(a >> (length - 33)) << 31;
             ulong bb = length < 64 ? (ulong)b : (ulong)(b & 0x7fffffff) | (ulong)(b >> (length - 33)) << 31;
             if (bits == 384) { Fp.InverseApproximate(Raw<Fp>(a), Raw<Fp>(b), out ulong pa, out ulong pb); Check(pa == aa && pb == bb, "Fp approximation"); }
             else { Fr.InverseApproximate(Raw<Fr>(a), Raw<Fr>(b), out ulong pa, out ulong pb); Check(pa == aa && pb == bb, "Fr approximation"); }
+            if (bits == 384 && batch >= 19)
+            {
+                Fp.InverseApproximate191(Raw<Fp>(a), Raw<Fp>(b), out ulong shortA, out ulong shortB);
+                if (!input.IsZero) Check(shortA == aa && shortB == bb, "191-bit approximation");
+                else
+                {
+                    InverseBatch.Steps31(shortA, shortB, out long zf0, out long zg0, out long zf1, out long zg1);
+                    Check(zf0 == 1 && zg0 == 0 && zf1 == 0 && zg1 == 1L << 31, "zero short matrix");
+                    Fp.InverseUpdate191(out Fp truncated, Raw<Fp>(a), Raw<Fp>(b), ref zf1, ref zg1);
+                    Check(Raw(truncated) == (b & ((BigInteger.One << 192) - 1)), "zero short b truncation");
+                }
+            }
             Matrix(aa, bb, 31, out BigInteger f0, out BigInteger g0, out BigInteger f1, out BigInteger g1);
             InverseBatch.Steps31(aa, bb, out long pf0, out long pg0, out long pf1, out long pg1);
             Check(f0 == pf0 && g0 == pg0 && f1 == pf1 && g1 == pg1, "packed matrix");
@@ -131,8 +148,9 @@ internal static class InverseTests
             if (nextB.Sign < 0) { f1 = -f1; g1 = -g1; }
             if (bits == 384)
             {
-                Fp.InverseUpdate(out Fp pa, Raw<Fp>(a), Raw<Fp>(b), ref pf0, ref pg0);
-                Fp.InverseUpdate(out Fp pb, Raw<Fp>(a), Raw<Fp>(b), ref pf1, ref pg1);
+                Fp pa, pb;
+                if (batch < 19 || input.IsZero) { Fp.InverseUpdate(out pa, Raw<Fp>(a), Raw<Fp>(b), ref pf0, ref pg0); Fp.InverseUpdate(out pb, Raw<Fp>(a), Raw<Fp>(b), ref pf1, ref pg1); }
+                else { Fp.InverseUpdate191(out pa, Raw<Fp>(a), Raw<Fp>(b), ref pf0, ref pg0); Fp.InverseUpdate191(out pb, Raw<Fp>(a), Raw<Fp>(b), ref pf1, ref pg1); }
                 Check(Raw(pa) == BigInteger.Abs(nextA) && Raw(pb) == BigInteger.Abs(nextB), "Fp full matrix");
             }
             else
@@ -144,8 +162,13 @@ internal static class InverseTests
             Check(pf0 == f0 && pg0 == g0 && pf1 == f1 && pg1 == g1, "matrix sign correction");
             (a, b) = (BigInteger.Abs(nextA), BigInteger.Abs(nextB));
             Check(input.IsZero || a.GetBitLength() + b.GetBitLength() <= Math.Max(1, oldLength - 31), "Pornin batch contraction");
+            if (batch >= 2) CheckCofactorRows(u, v, f0, g0, f1, g1, batch <= (bits == 384 ? 11 : 8), bits);
+            else Check(BigInteger.Abs(u * f0 + v * g0) <= BigInteger.One << (31 * (batch + 1)) && BigInteger.Abs(u * f1 + v * g1) <= BigInteger.One << (31 * (batch + 1)), "special first two batches");
+            if (BigInteger.Abs(v) >= BigInteger.One << (bits + 63)) Check(f0 == 1 && g0 == 0, "discarded v words multiply zero");
             (u, v) = (u * f0 + v * g0, u * f1 + v * g1);
             elapsed += 31;
+            Check(BigInteger.Abs(u) < BigInteger.One << (bits + 63), "narrow u result");
+            if (batch <= (bits == 384 ? 11 : 8)) Check(BigInteger.Abs(v) < BigInteger.One << (bits + 63), "narrow v result");
             Check(BigInteger.Abs(u) <= BigInteger.One << elapsed && BigInteger.Abs(v) <= BigInteger.One << elapsed, "wide cofactor bounds");
             Check((u * input - (a << elapsed)) % m == 0 && (v * input - (b << elapsed)) % m == 0, "cofactor invariant");
         }
@@ -156,6 +179,7 @@ internal static class InverseTests
         Check(ff1 == finalF && gg1 == finalG, "final matrix");
         Check((a * ff0 + b * gg0) >> count == 0, "termination within fixed bound");
         Check((a * ff1 + b * gg1) >> count == (input.IsZero ? m : 1), "gcd");
+        CheckCofactorRows(u, v, 1, 0, ff1, gg1, false, bits);
         v = u * ff1 + v * gg1;
         Check(BigInteger.Abs(v) <= BigInteger.One << (2 * bits), "final cofactor bound");
         BigInteger modx = m << (2 * bits - (int)m.GetBitLength());
@@ -164,6 +188,60 @@ internal static class InverseTests
         else if (v == BigInteger.One << (2 * bits)) v -= modx;
         Check(v.Sign >= 0 && v < BigInteger.One << (2 * bits), "modx correction bound");
         Check((v * input - (BigInteger.One << (2 * bits))) % m == 0 || input.IsZero && v.IsZero, "final Montgomery invariant");
+    }
+
+    private static BigInteger Signed<T>(in T value) where T : unmanaged
+    {
+        BigInteger raw = Raw(value), limit = BigInteger.One << (8 * Marshal.SizeOf<T>());
+        return raw >= (limit >> 1) ? raw - limit : raw;
+    }
+
+    // Check the actual reduced-width product helpers at every scheduled update,
+    // including the sign/excess word (seven limbs for Fp, five for Fr).
+    private static void CheckCofactorRows(BigInteger u, BigInteger v, BigInteger f0, BigInteger g0,
+        BigInteger f1, BigInteger g1, bool narrowV, int bits)
+    {
+        BigInteger narrowMask = (BigInteger.One << (bits + 64)) - 1;
+        BigInteger wideMask = (BigInteger.One << (2 * bits)) - 1;
+        BigInteger nextU = u * f0 + v * g0, nextV = u * f1 + v * g1;
+        Check(BigInteger.Abs(nextU) < BigInteger.One << (bits + 63), "narrow row output fits with sign");
+        if (narrowV) Check(BigInteger.Abs(nextV) <= BigInteger.One << (bits == 384 ? 372 : 279), "early v growth bound");
+        if (bits == 384)
+        {
+            Fp.InverseNarrow pu = Raw<Fp.InverseNarrow>(u & narrowMask);
+            if (narrowV)
+            {
+                Fp.InverseNarrow pv = Raw<Fp.InverseNarrow>(v & narrowMask);
+                Fp.InverseCoefficientNarrow(out Fp.InverseNarrow nu, pu, pv, (long)f0, (long)g0);
+                Fp.InverseCoefficientNarrow(out Fp.InverseNarrow nv, pu, pv, (long)f1, (long)g1);
+                Check(Signed(nu) == nextU && Signed(nv) == nextV, "Fp narrow cofactor rows");
+            }
+            else
+            {
+                Fp.InverseWide pv = Raw<Fp.InverseWide>(v & wideMask);
+                Fp.InverseCoefficientKeep(out Fp.InverseNarrow nu, pu, pv, (long)f0, (long)g0);
+                long top = Fp.InverseCoefficientWide(out Fp.InverseWide nv, pu, pv, (long)f1, (long)g1);
+                Check(Signed(nu) == nextU && Raw(nv) + ((BigInteger)top << (2 * bits)) == nextV, "Fp mixed cofactor rows");
+            }
+        }
+        else
+        {
+            Fr.InverseNarrow pu = Raw<Fr.InverseNarrow>(u & narrowMask);
+            if (narrowV)
+            {
+                Fr.InverseNarrow pv = Raw<Fr.InverseNarrow>(v & narrowMask);
+                Fr.InverseCoefficientNarrow(out Fr.InverseNarrow nu, pu, pv, (long)f0, (long)g0);
+                Fr.InverseCoefficientNarrow(out Fr.InverseNarrow nv, pu, pv, (long)f1, (long)g1);
+                Check(Signed(nu) == nextU && Signed(nv) == nextV, "Fr narrow cofactor rows");
+            }
+            else
+            {
+                Fr.InverseWide pv = Raw<Fr.InverseWide>(v & wideMask);
+                Fr.InverseCoefficientKeep(out Fr.InverseNarrow nu, pu, pv, (long)f0, (long)g0);
+                long top = Fr.InverseCoefficientWide(out Fr.InverseWide nv, pu, pv, (long)f1, (long)g1);
+                Check(Signed(nu) == nextU && Raw(nv) + ((BigInteger)top << (2 * bits)) == nextV, "Fr mixed cofactor rows");
+            }
+        }
     }
 
     private static void Matrix(BigInteger a, BigInteger b, int count, out BigInteger f0, out BigInteger g0, out BigInteger f1, out BigInteger g1)
@@ -246,19 +324,19 @@ internal static class InverseTests
         byte[] bytes = new byte[bits / 4];
         for (int i = 0; i < 256; i++)
         {
-            random.NextBytes(bytes); BigInteger u = new(bytes, false);
+            random.NextBytes(bytes); BigInteger u = new(bytes.AsSpan(0, bits / 8 + 8), false);
             random.NextBytes(bytes); BigInteger v = new(bytes, false);
             long f = i % 3 == 0 ? 1L << 31 : random.NextInt64(-(1L << 31), 1L << 31);
             long g = i % 3 == 0 ? -(1L << 31) : random.NextInt64(-(1L << 31), 1L << 31);
             BigInteger expected = u * f + v * g;
             if (bits == 384)
             {
-                long top = Fp.InverseCoefficient(out Fp.InverseWide result, Raw<Fp.InverseWide>(u & mask), Raw<Fp.InverseWide>(v & mask), f, g);
+                long top = Fp.InverseCoefficientWide(out Fp.InverseWide result, Raw<Fp.InverseNarrow>(u & ((BigInteger.One << 448) - 1)), Raw<Fp.InverseWide>(v & mask), f, g);
                 Check(Raw(result) + ((BigInteger)top << (2 * bits)) == expected, "Fp signed wide matrix");
             }
             else
             {
-                long top = Fr.InverseCoefficient(out Fr.InverseWide result, Raw<Fr.InverseWide>(u & mask), Raw<Fr.InverseWide>(v & mask), f, g);
+                long top = Fr.InverseCoefficientWide(out Fr.InverseWide result, Raw<Fr.InverseNarrow>(u & ((BigInteger.One << 320) - 1)), Raw<Fr.InverseWide>(v & mask), f, g);
                 Check(Raw(result) + ((BigInteger)top << (2 * bits)) == expected, "Fr signed wide matrix");
             }
         }
