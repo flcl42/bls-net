@@ -41,9 +41,11 @@ internal static class ExtensionConstants
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     internal static void MultiplyConjugatePair(out Fp2 result, in Fp2 a, in Fp c)
     {
+        // c may alias a coefficient of result; copy it before the first write.
+        Fp cc = c;
         Fp.AddUnreduced(out Fp sum, a.C0, a.C1);
         Fp.SubtractComposite(out Fp difference, a.C1, a.C0);
-        Fp.MultiplyComposite(out result.C0, sum, c);
-        Fp.MultiplyComposite(out result.C1, difference, c);
+        Fp.MultiplyComposite(out result.C0, sum, cc);
+        Fp.MultiplyComposite(out result.C1, difference, cc);
     }
 }

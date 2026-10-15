@@ -278,8 +278,10 @@ internal static class Msm<T> where T : unmanaged, IField<T>
         finally { ArrayPool<T>.Shared.Return(products); ArrayPool<Jacobian<T>>.Shared.Return(rented); }
     }
 
+    // Reads 32 bits and shifts by up to 7, so windows up to 24 bits wide are exact.
     private static int Booth(ReadOnlySpan<byte> s, int bit, int w)
     {
+        System.Diagnostics.Debug.Assert(w <= 24);
         int start = bit - 1;
         uint word;
         if (start < 0) word = BinaryPrimitives.ReadUInt32LittleEndian(s) << 1;
