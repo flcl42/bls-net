@@ -870,10 +870,10 @@ index 00000000..0e9e560a
 +}
 diff --git a/src/tests/JIT/opt/Add/MaskedSwap.csproj b/src/tests/JIT/opt/Add/MaskedSwap.csproj
 new file mode 100644
-index 00000000..d9be56e4
+index 00000000..0ec109aa
 --- /dev/null
 +++ b/src/tests/JIT/opt/Add/MaskedSwap.csproj
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,12 @@
 +<Project Sdk="Microsoft.NET.Sdk">
 +  <PropertyGroup>
 +    <RequiresProcessIsolation>true</RequiresProcessIsolation>
@@ -886,7 +886,6 @@ index 00000000..d9be56e4
 +    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
 +  </ItemGroup>
 +</Project>
-+
 diff --git a/src/tests/JIT/opt/Add/MixedCarryRows.cs b/src/tests/JIT/opt/Add/MixedCarryRows.cs
 new file mode 100644
 index 00000000..13bc1b60

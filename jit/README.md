@@ -1,6 +1,6 @@
 # Carry and select lowering
 
-Apply `followup.patch` to dotnet/runtime **0a303c9**, the merged PR #134039 head. The combined patch contains the carry-row follow-up submitted as [draft PR #3](https://github.com/benaadams/runtime/pull/3), plus the separate inverse-select addition below. It changes no managed runtime or instruction-set APIs. The existing carry-row changes are:
+Apply `followup.patch` to dotnet/runtime **0a303c9**, the merged PR #134039 head. The combined patch contains the carry-row follow-up and the inverse-select addition below; [draft PR #3](https://github.com/benaadams/runtime/pull/3) carries them as two commits. It changes no managed runtime or instruction-set APIs. The existing carry-row changes are:
 
 * Recognize independent multiply-accumulate rows even when another product in the block is not a row lane. A square's diagonal products previously prevented its cross-product rows from using ADCX/ADOX. Rejected lanes remain untouched and terminate a candidate row; all original single-use, interference and flag-preservation checks still apply.
 * Give a row's common multiplier a separate local when its current value has another direct read after that row, before a redefinition. This lets LSRA keep the copy in RDX while preserving the source for a later diagonal/row. Restricting the copy avoids extra intervals in ordinary CIOS products. `MixedCarryRows` and the existing multiplier-copy/pressure cases exercise both paths.
@@ -8,7 +8,7 @@ Apply `followup.patch` to dotnet/runtime **0a303c9**, the merged PR #134039 head
 
 ## Inverse-select addition
 
-[`inverse-selects.patch`](inverse-selects.patch) contains only the new changes, relative to the existing carry-row follow-up. Use it for review, or apply it after that follow-up; do not apply both this patch and the combined `followup.patch`.
+[`inverse-selects.patch`](inverse-selects.patch) contains only the second commit, relative to the carry-row follow-up. Use it for review, or apply it after that follow-up; do not apply both this patch and the combined `followup.patch`.
 
 * Run mask-select lowering in optimized AMD64 methods without requiring a carry chain. Binary-GCD loops have no carry additions and previously skipped this pass.
 * Preserve existing direct SETCC/carry-flag selects; lower other `0 - (value & 1)` selects with TEST/CMOV. Save the tested value before any source overwrite; repeat TEST after flag-clobbering work and reuse it only across checked flag-preserving nodes. Every mask use must still be an eligible select. Arbitrary masks keep their bitwise meaning.

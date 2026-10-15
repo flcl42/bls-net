@@ -78,6 +78,6 @@ $env:BLST_BENCH_PROCESSOR = '3'
   --timing-samples 20000 --no-native --expanded-kernels --filter 'CT '
 ```
 
-Repeat with compact kernels and each host/target. The full suite and benchmark commands are in [README](../README.md#build-and-test). Raw captures live under ignored `artifacts/safegcd-r2/` in the validation workspace and can be regenerated; tables retain the results.
+Repeat with compact kernels and each host/target. The full suite and benchmark commands are in [README](../README.md#build-and-test). Raw captures are not kept in the repository; the audit script and the benchmark runner's timing-leak mode regenerate them, and the tables retain the results.
 
 These observations apply to the recorded Windows x64 JITs and captured tiering settings. They do not cover debugger MinOpts, arbitrary stress settings, NativeAOT, ARM64, future JITs, power/EM leakage or memory disclosure. Repeat review after relevant source/runtime changes. Statistical non-detection is supporting evidence for these captures, not proof of absence of leakage.

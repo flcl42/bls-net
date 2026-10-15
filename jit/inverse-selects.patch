@@ -1,7 +1,8 @@
 diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
+index dfdbf5f9..bac51326 100644
 --- a/src/coreclr/jit/lower.cpp
 +++ b/src/coreclr/jit/lower.cpp
-@@ -9817,11 +9817,16 @@
+@@ -9817,11 +9817,16 @@ void Lowering::AfterLowerBlocks()
          }
  #ifdef TARGET_AMD64
          LowerMultiplyCarryLoops();
@@ -19,7 +20,7 @@ diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
  #endif
  }
  #endif // !TARGET_WASM
-@@ -15093,12 +15098,13 @@
+@@ -15093,12 +15098,13 @@ bool Lowering::TryLowerMultiplyCarryRows()
  
  //------------------------------------------------------------------------
  // LowerMaskSelects: Turn constant-time selects written with a mask made from a
@@ -35,7 +36,7 @@ diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
  //
  void Lowering::LowerMaskSelects()
  {
-@@ -15117,7 +15123,7 @@
+@@ -15117,7 +15123,7 @@ void Lowering::LowerMaskSelects()
              hasMask |= node->OperIs(GT_NEG);
          }
          // A rewrite removes nodes, so look again with fresh reference links after each one.
@@ -44,7 +45,7 @@ diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
          {
          }
      }
-@@ -15211,30 +15217,45 @@
+@@ -15211,30 +15217,45 @@ bool Lowering::TryLowerMaskSelect()
              andOne = value;
              value  = value->gtGetOp1();
          }
@@ -61,54 +62,48 @@ diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
 +            canUseCC = prevRef.Lookup(bitRead, &bitDef) && bitDef->OperIs(GT_STORE_LCL_VAR) &&
 +                       !m_compiler->lvaGetDesc(bitRead->AsLclVar()->GetLclNum())->IsAddressExposed();
 +            if (canUseCC)
-+            {
+             {
+-                continue;
 +                value = bitDef->gtGetOp1();
-+            }
-+        }
-+        GenTree* cast = nullptr;
+             }
+-            value = bitDef->gtGetOp1();
+         }
+         GenTree* cast = nullptr;
+-        if (value->OperIs(GT_CAST) && !value->gtOverflow() && value->AsCast()->CastOp()->TypeIs(TYP_INT))
 +        if (canUseCC && value->OperIs(GT_CAST) && !value->gtOverflow() && value->AsCast()->CastOp()->TypeIs(TYP_INT))
-+        {
+         {
+-            cast  = value;
 +            cast = value;
-+            value = value->AsCast()->CastOp();
-+        }
+             value = value->AsCast()->CastOp();
+         }
+-        if (!value->OperIs(GT_SETCC) || (GenConditionDesc::Get(value->AsCC()->gtCondition).oper != GT_NONE) ||
+-            (value->gtPrev == nullptr) || !value->gtPrev->gtSetFlags())
 +        canUseCC = canUseCC && value->OperIs(GT_SETCC) &&
 +                   (GenConditionDesc::Get(value->AsCC()->gtCondition).oper == GT_NONE) &&
 +                   (value->gtPrev != nullptr) && value->gtPrev->gtSetFlags();
 +        bool testBit = !canUseCC;
 +        if (testBit)
-+        {
-+            if (andOne == nullptr)
-             {
-                 continue;
-             }
--            value = bitDef->gtGetOp1();
--        }
--        GenTree* cast = nullptr;
--        if (value->OperIs(GT_CAST) && !value->gtOverflow() && value->AsCast()->CastOp()->TypeIs(TYP_INT))
--        {
--            cast  = value;
--            value = value->AsCast()->CastOp();
--        }
--        if (!value->OperIs(GT_SETCC) || (GenConditionDesc::Get(value->AsCC()->gtCondition).oper != GT_NONE) ||
--            (value->gtPrev == nullptr) || !value->gtPrev->gtSetFlags())
--        {
+         {
 -            continue;
--        }
--        GenTree*     cc       = value;
--        GenTree*     producer = cc->gtPrev;
--        GenCondition cond     = cc->AsCC()->gtCondition;
++            if (andOne == nullptr)
++            {
++                continue;
++            }
 +            value = originalValue;
 +            bitRead = nullptr;
 +            bitDef = nullptr;
 +            cast = nullptr;
-+        }
+         }
+-        GenTree*     cc       = value;
+-        GenTree*     producer = cc->gtPrev;
+-        GenCondition cond     = cc->AsCC()->gtCondition;
 +        GenTree*     cc       = testBit ? nullptr : value;
 +        GenTree*     producer = testBit ? andOne : cc->gtPrev;
 +        GenCondition cond     = testBit ? GenCondition::NE : cc->AsCC()->gtCondition;
  
          // Every read of the mask value must be a select t ^ ((t ^ s) & mask).
          selects.clear();
-@@ -15346,15 +15367,26 @@
+@@ -15346,15 +15367,26 @@ bool Lowering::TryLowerMaskSelect()
              remaining -= isSelect ? 1 : 0;
              valid = (node != nullptr) && (isSelect || isRemoved(node) || IsCarryFlagsCrossing(node));
          }
@@ -136,7 +131,7 @@ diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
          for (const Select& select : selects)
          {
              GenTree* s = select.s;
-@@ -15363,7 +15395,24 @@
+@@ -15363,7 +15395,24 @@ bool Lowering::TryLowerMaskSelect()
              s->ClearRegOptional();
              select.t->ClearContained();
              select.t->ClearRegOptional();
@@ -161,15 +156,10 @@ diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
              rewritten.Set(select.outer, cmov);
              BlockRange().InsertBefore(select.outer, cmov);
              LIR::Use use;
-@@ -15389,6 +15438,251 @@
-                 BlockRange().Remove(node);
-             }
-         }
-+        return true;
-+    }
-+    return false;
-+}
-+
+@@ -15394,6 +15443,251 @@ bool Lowering::TryLowerMaskSelect()
+     return false;
+ }
+ 
 +//------------------------------------------------------------------------
 +// TryLowerMaskedXorSwap: CSE shares (a ^ b) & (0 - bit) between the two
 +// outputs of a conditional swap. Recognize every use of the mask and replace
@@ -410,13 +400,19 @@ diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
 +            if (node != nullptr)
 +                BlockRange().Remove(node);
 +        JITDUMP("Lowered shared masked XOR swaps to flag selects\n");
-         return true;
-     }
-     return false;
++        return true;
++    }
++    return false;
++}
++
+ //------------------------------------------------------------------------
+ // FindMultiplyCarryStore: Find a local's sole store and sole read in this block.
+ // Ordinary intermediates require a preceding store and cannot be live out.
 diff --git a/src/coreclr/jit/lower.h b/src/coreclr/jit/lower.h
+index 2b58ea5a..ec018ddc 100644
 --- a/src/coreclr/jit/lower.h
 +++ b/src/coreclr/jit/lower.h
-@@ -185,6 +185,7 @@
+@@ -185,6 +185,7 @@ private:
      bool     TryLowerMultiplyCarryRows();
      void     LowerMaskSelects();
      bool     TryLowerMaskSelect();
@@ -426,6 +422,7 @@ diff --git a/src/coreclr/jit/lower.h b/src/coreclr/jit/lower.h
      void     LowerMultiplyCarryLoads();
 diff --git a/src/tests/JIT/opt/Add/MaskedSwap.cs b/src/tests/JIT/opt/Add/MaskedSwap.cs
 new file mode 100644
+index 00000000..0e9e560a
 --- /dev/null
 +++ b/src/tests/JIT/opt/Add/MaskedSwap.cs
 @@ -0,0 +1,153 @@
@@ -584,9 +581,10 @@ new file mode 100644
 +}
 diff --git a/src/tests/JIT/opt/Add/MaskedSwap.csproj b/src/tests/JIT/opt/Add/MaskedSwap.csproj
 new file mode 100644
+index 00000000..0ec109aa
 --- /dev/null
 +++ b/src/tests/JIT/opt/Add/MaskedSwap.csproj
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,12 @@
 +<Project Sdk="Microsoft.NET.Sdk">
 +  <PropertyGroup>
 +    <RequiresProcessIsolation>true</RequiresProcessIsolation>
@@ -599,4 +597,3 @@ new file mode 100644
 +    <CLRTestEnvironmentVariable Include="DOTNET_JITMinOpts" Value="0" />
 +  </ItemGroup>
 +</Project>
-+
