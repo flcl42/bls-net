@@ -1,0 +1,67 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm, macos-15]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_TieredCompilation: '0'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      # Quality applies to every version in one invocation: keep GA and preview separate.
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '11.0.x'
+          dotnet-quality: preview
+      - name: Build native reference
+        run: |
+          if ($IsWindows) { ./scripts/build-native-blst.ps1 }
+          else { sh ./scripts/build-native-blst.sh; if ($LASTEXITCODE) { throw 'Native build failed' } }
+      - name: Build and validate both frameworks
+        run: |
+          foreach ($tfm in @('net10.0', 'net11.0')) {
+            dotnet build Nethermind.Crypto.BlsNet.slnx -c Release "-p:BlsNetTestTargetFramework=$tfm" --warnaserror
+            if ($LASTEXITCODE) { throw "Build failed: $tfm" }
+            $tests = "tests/Nethermind.Crypto.BlsNet.Tests/bin/Release/$tfm/Nethermind.Crypto.BlsNet.Tests.dll"
+            foreach ($policy in @('compact', 'expanded')) {
+              dotnet $tests "--$policy-kernels" --require-native
+              if ($LASTEXITCODE) { throw "Native tests failed: $tfm $policy" }
+            }
+            dotnet $tests --no-native
+            if ($LASTEXITCODE) { throw "Managed tests failed: $tfm" }
+          }
+      - name: Capture informational benchmarks
+        run: |
+          New-Item -ItemType Directory -Force artifacts/benchmarks | Out-Null
+          foreach ($tfm in @('net10.0', 'net11.0')) {
+            foreach ($policy in @('compact', 'expanded')) {
+              dotnet "benchmarks/Nethermind.Crypto.BlsNet.Benchmarks/bin/Release/$tfm/Nethermind.Crypto.BlsNet.Benchmarks.dll" --quick --require-native "--$policy-kernels" |
+                Tee-Object "artifacts/benchmarks/$tfm-$policy.txt"
+              if ($LASTEXITCODE) { throw "Benchmark runner failed: $tfm $policy" }
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmarks-${{ matrix.os }}
+          path: artifacts/benchmarks/*.txt
+          if-no-files-found: ignore

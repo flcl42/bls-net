@@ -4,6 +4,8 @@ using Nethermind.Crypto.BlsNet.Curves;
 
 internal static unsafe class CurveNative
 {
+    // Pinned e1.c/e2.c and map_to_g1.c/map_to_g2.c export int predicates,
+    // despite the bool spelling in bindings/blst.h.
     [DllImport("blst", CallingConvention = CallingConvention.Cdecl)]
     internal static extern G1Affine* blst_p1_affine_generator();
     [DllImport("blst", CallingConvention = CallingConvention.Cdecl)]

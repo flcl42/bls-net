@@ -1,5 +1,6 @@
 param(
-    [string]$W64DevkitVersion = "2.7.0"
+    [string]$W64DevkitVersion = "2.7.0",
+    [ValidateSet('x64','arm64')][string]$Architecture = $(if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' })
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,25 @@ if (!(Test-Path -LiteralPath (Join-Path $blstRoot "src\server.c"))) {
     throw "Initialize native test sources with: git submodule update --init --depth 1 external/blst"
 }
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+if ($Architecture -eq 'arm64') {
+    # Use upstream's ARM64 assembler and MSVC DLL build. Import the developer
+    # environment in the child process; do not change this PowerShell session.
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (!(Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio Build Tools with MSVC ARM64 tools and a Windows SDK.' }
+    $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+    if (!$vs) { throw 'No Visual Studio installation with MSVC ARM64 tools found.' }
+    $vcvars = Join-Path $vs 'VC/Auxiliary/Build/vcvarsall.bat'
+    $build = Join-Path $blstRoot 'build.bat'
+    $hostArchitecture = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64_arm64' }
+    Push-Location $outputRoot
+    try {
+        if (Test-Path -LiteralPath 'blst.dll') { Remove-Item -LiteralPath 'blst.dll' -Force }
+        & $env:ComSpec /d /c "`"`"$vcvars`" $hostArchitecture && call `"$build`" -shared`""
+        if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath 'blst.dll')) { throw 'MSVC ARM64 blst build failed.' }
+        Get-Item -LiteralPath 'blst.dll'
+    } finally { Pop-Location }
+    return
+}
 $toolsRoot = Join-Path $repoRoot "artifacts\native-tools"
 $extractRoot = Join-Path $toolsRoot "extract"
 $kitRoot = Join-Path $extractRoot "w64devkit"
