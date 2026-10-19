@@ -93,6 +93,8 @@ dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release -
 
 One CLI covers fields, tower/pairing, curves/maps/MSM and the dependent Fr/Fp mul+add loops. `--filter` matches case-insensitive substrings separated by `|`; `--quick` shortens rounds and the default MSM sweep. Kernel policy switches and `--no-native` work here too. On Windows, set `BLST_BENCH_PROCESSOR` to pin a logical processor and disable tiering with `DOTNET_TieredCompilation=0` for measurements. Benchmarks also accept `-p:BlsNetTestTargetFramework=net10.0`.
 
+For real ARM64 comparisons of a source-built carry-aware runtime against stock .NET 11 and native blst, see the [runtime performance pipeline](perf/README.md) and [first Linux baseline](perf/baseline-linux-arm64.md).
+
 `--filter 'CT '` measures constant-time / variable-time / blst side by side. The slow timing-leak experiment is opt-in with `--timing-leak --timing-samples 20000`; it includes variable-time multiplication as a required positive control. See [validation](docs/constant-time-validation.md) for its method and interpretation.
 
 The retained EIP-2537 results use Nethermind's BenchmarkDotNet in-process Short job on a Ryzen 9 9950X3D VM, Windows 11. Native is Nethermind.Crypto.Bls 0.3.17.15; managed is compiled for net10.0. Stock is .NET 10.0.12. Fast results use the carry-aware lowering now included in [dotnet/runtime PR #134039](https://github.com/dotnet/runtime/pull/134039), head `0a303c9` or later.
