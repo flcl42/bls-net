@@ -74,7 +74,35 @@ Before is a clean archive of the parent revision; after is this checkout, built 
 | Patched compact | 1.72 / 1.75 | 1.611 / 1.613 | 4.123 / 4.153 |
 | Patched expanded | 1.75 / 1.75 | 1.559 / 1.595 | 2.971 / 3.006 |
 
-Use `--filter 'Fp multiply|Fp square|Fp2 multiply|Fp2 square|CT Fp inverse|G1 MSM 128|G2 MSM 128'` with the reproduction settings above. [ARM64 code-generation findings](constant-time-validation.md#hot-kernel-findings-and-policy) explain why the existing policy is retained. Emulated timings are excluded; CI uploads both policies' managed/native results from real ARM64 runners for subsequent assessment.
+Use `--filter 'Fp multiply|Fp square|Fp2 multiply|Fp2 square|CT Fp inverse|G1 MSM 128|G2 MSM 128'` with the reproduction settings above. Emulated timings are excluded.
+
+## ARM64 hardware
+
+Captured 2026-10-19 by CI on GitHub-hosted `ubuntu-24.04-arm` and `macos-15` (Apple silicon) runners: stock .NET 10.0.13 and .NET 11 RC2, `--quick`, tiering disabled, one run per cell on shared VMs, so treat a few percent as noise. blst is the same pinned commit built with its ARM64 assembly. Each cell is managed time, with its ratio to blst; blst's own time is in the last column.
+
+| Linux ARM64 | .NET 10 compact | .NET 10 expanded | .NET 11 expanded | blst |
+|---|---:|---:|---:|---:|
+| Fp multiply (ns) | 79.7 (2.04x) | 79.7 (2.04x) | 79.7 (2.03x) | 39.1 |
+| Fp2 multiply (ns) | 296.5 (2.62x) | 249.3 (2.21x) | 249.4 (2.21x) | 113.0 |
+| G1 multiply (µs) | 230.1 (2.58x) | 186.4 (2.09x) | 162.5 (1.82x) | 89.0 |
+| G2 multiply (µs) | 323.7 (1.77x) | 284.8 (1.56x) | 284.9 (1.55x) | 183.2 |
+| G1 MSM 128 (ms) | 9.16 (2.69x) | 7.87 (2.31x) | 6.27 (1.84x) | 3.41 |
+| G2 MSM 128 (ms) | 17.98 (1.96x) | 11.64 (1.27x) | 11.64 (1.27x) | 9.17 |
+| Map to G2 (µs) | 385.6 (2.40x) | 355.7 (2.22x) | 355.6 (2.22x) | 160.5 |
+| Pairing check 2 (ms) | 2.02 (2.36x) | 1.91 (2.24x) | 1.91 (2.24x) | 0.85 |
+
+| macOS ARM64 | .NET 10 compact | .NET 10 expanded | .NET 11 expanded | blst |
+|---|---:|---:|---:|---:|
+| Fp multiply (ns) | 80.8 (2.77x) | 80.2 (2.76x) | 79.0 (2.57x) | 29.1 |
+| Fp2 multiply (ns) | 300.1 (3.32x) | 275.8 (2.98x) | 245.2 (2.67x) | 90.5 |
+| G1 multiply (µs) | 210.6 (2.66x) | 175.8 (2.22x) | 157.9 (2.00x) | 79.2 |
+| G2 multiply (µs) | 300.3 (2.02x) | 269.6 (1.82x) | 269.8 (1.82x) | 148.5 |
+| G1 MSM 128 (ms) | 8.35 (3.05x) | 7.23 (2.63x) | 6.04 (2.17x) | 2.74 |
+| G2 MSM 128 (ms) | 17.83 (2.41x) | 11.15 (1.51x) | 11.16 (1.47x) | 7.40 |
+| Map to G2 (µs) | 364.2 (2.76x) | 342.8 (2.59x) | 342.9 (2.60x) | 132.1 |
+| Pairing check 2 (ms) | 1.97 (2.81x) | 1.74 (2.45x) | 1.74 (2.49x) | 0.70 |
+
+Expanded beats compact on ARM64 even on .NET 10, unlike x64, so ARM64 defaults to expanded on every runtime. Stock ARM64 JITs still materialize carries with `cmp`/`cset` (see [code-generation findings](constant-time-validation.md#hot-kernel-findings-and-policy)), which leaves managed code about 1.3–3x slower than blst's ARM64 assembly. That is the same kind of gap the carry-aware JIT closes on x64. CI uploads the full output of every run as artifacts.
 
 ## EIP-2537 precompiles
 

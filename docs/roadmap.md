@@ -1,6 +1,6 @@
 # Roadmap
 
-Nethermind.Crypto.BlsNet is a pure C# BLS12-381 library for public-input operations. The library targets .NET 10 and .NET 11. Release packaging, first hosted CI results and real ARM64 hardware validation remain open.
+Nethermind.Crypto.BlsNet is a pure C# BLS12-381 library for public-input operations. The library targets .NET 10 and .NET 11. Release packaging remains open.
 
 ## Implemented
 
@@ -30,7 +30,7 @@ EIP-2537 integration and BenchmarkDotNet precompile comparisons exist in a Nethe
 | Stock-JIT performance | Main open performance item. Track adoption of PR #134039 into released runtimes and measure arithmetic calling patterns on stock hosts. Preserve compact .NET 10 fallbacks and measure .NET 10 and .NET 11 separately. |
 | Hosted CI validation | The five-platform workflow is implemented; collect its first hosted results and benchmark artifacts. Both frameworks, both native kernel policies and managed-only runs are configured. |
 | Packaging and publishing | Package metadata review, repository URL, version/release policy, publication and release validation. Development package generation already works. |
-| ARM64 hardware and broader platforms | Native builds and stock .NET 10/11 ARM64 code review are implemented. Linux ARM64 emulation supplies correctness evidence; collect real hardware performance and runtime JIT/tier-1 review on macOS/Windows ARM64. Preserve runtime-based defaults until hardware evidence justifies architecture-specific tuning. macOS x64 has a build path but no CI job in the current matrix. |
+| ARM64 hardware and broader platforms | Native builds, stock .NET 10/11 ARM64 code review, Linux ARM64 emulation and CI on Linux/macOS/Windows ARM64 hardware are in place; ARM64 defaults to the expanded kernels. Stock ARM64 JITs still materialize carries, leaving managed code about 1.3–3x behind blst's ARM64 assembly: extend the carry-aware JIT work to ARM64. Runtime JIT/tier-1 review on macOS/Windows ARM64 remains open. macOS x64 has a build path but no CI job in the current matrix. |
 
 ## Engineering constraints
 
