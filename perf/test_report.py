@@ -40,6 +40,7 @@ G1 MSM 128,6000.000,3000.000
             (out / 'source.json').write_text(json.dumps({
                 'runtime_repo': 'example/runtime', 'runtime_commit': 'abc',
                 'library_commit': 'def', 'settings': {'BENCH_REPETITIONS': '3'}}))
+            (out / 'machine.json').write_text(json.dumps({'affinity': [2, 3]}))
             (out / 'executions.jsonl').write_text('\n'.join(json.dumps({
                 'name': f'jit-{i}', 'exit_code': 100, 'expected': 100}) for i in range(20)))
             for policy in ('compact', 'expanded'):
@@ -55,6 +56,11 @@ G1 MSM 128,6000.000,3000.000
                 'patched': [4, 2], 'stock': [8, 4]})
             self.assertIn('| 8.000 | 4.000 | 4.000 / 2.000 | 2.00x | 2.00x |',
                           (out / 'summary.md').read_text(encoding='utf-8'))
+            self.assertIn('taskset, CPU 2', (out / 'summary.md').read_text(encoding='utf-8'))
+            (out / 'machine.json').write_text(json.dumps({'affinity': None}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                report.main(out)
+            self.assertIn('CPU affinity: **unpinned**', (out / 'summary.md').read_text(encoding='utf-8'))
             (out / 'bench-stock-expanded-3.txt').write_text('')
             with self.assertRaisesRegex(RuntimeError, 'Missing or mismatched'):
                 report.main(out)

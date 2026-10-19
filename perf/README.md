@@ -63,7 +63,13 @@ scoped by GitHub to branches: a new experiment branch may need its own cold buil
 unless its base is a cache-accessible default branch.
 
 Actual cold and warm build durations are recorded in `timings.txt` and the job
-summary. Initial hardware validation and timing measurements are in progress.
+summary. The [first Linux baseline](baseline-linux-arm64.md) took 15m04s for the
+cold testhost and 16m38s including both JITs; the complete measurement job took
+30m35s. Its cache compressed to 237 MiB. The [JIT-only source-change run](https://github.com/flcl42/bls-net/actions/runs/39309342059)
+restored that exact cache in 2s and built both JITs in **3m18s**, skipping the
+CoreCLR/libraries build. The entire successful Linux JIT-only measurement job
+took **17m12s**, including all correctness/stress tests, benchmarks and disassembly.
+macOS durations are being measured separately.
 
 ## Validation and results
 
@@ -85,7 +91,9 @@ Each host/policy first runs a full `--quick` sweep, followed by the filtered
 repetitions, alternating host order. Linux processes are pinned with `taskset` to
 the first allowed CPU. ReadyToRun and tiering are disabled for both hosts.
 macOS has no supported equivalent of `taskset`; its captures are unpinned and
-should be interpreted separately. Disassembly captures run after timed samples.
+should be interpreted separately. Disassembly captures run after timed samples
+and include all JIT-compiled methods from the library assembly, covering field,
+tower, inverse and curve helpers even when kernel names change.
 
 The summary table and `summary.md` report row medians in µs, with separate native
 medians for stock and patched processes and ratios to each host's native median.
@@ -100,3 +108,8 @@ the standalone runner and source manifest, timings, and stock/patched disassembl
 for both policies. Artifacts expire after 30 days. Shared VMs and the benchmark
 harness's best-round sampling limit statistical precision; small differences
 are not reliable speed claims.
+
+The patched host is a full .NET 12 source build, compared with stock .NET 11;
+the comparison includes changes throughout the runtime. Scalar and MSM
+comparisons also include library algorithm differences
+from blst. Windows ARM64 has no job in this performance workflow.

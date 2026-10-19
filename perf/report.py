@@ -51,9 +51,13 @@ def parse(path):
 def main(out):
     source = json.loads((out / 'source.json').read_text())
     repetitions = int(source['settings']['BENCH_REPETITIONS'])
+    machine = json.loads((out / 'machine.json').read_text()) if (out / 'machine.json').exists() else {}
+    affinity = machine.get('affinity')
+    affinity_text = f'taskset, CPU {min(affinity)}' if affinity else 'unpinned'
     lines = ['# ARM64 runtime comparison', '',
              f"Runtime: `{source['runtime_repo']}@{source['runtime_commit']}`; library: `{source['library_commit']}`.",
-             '', f'Medians of {repetitions} alternating, single-core captures per host/policy; all times in **µs**.',
+             '', f'Medians of {repetitions} alternating captures per host/policy; all times in **µs**.',
+             f'CPU affinity: **{affinity_text}**.',
              'Each host measures native blst in the same process. Ratios use that host’s own native median.',
              'ReadyToRun and tiering are disabled. The harness reports best rounds; shared-runner noise remains.', '']
     for patch in source.get('patches', []):

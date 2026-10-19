@@ -109,7 +109,8 @@ def bench():
             path = OUT / f'disasm-{host}-{policy}.asm'
             run(host, BENCH, ['--quick', '--require-native', f'--{policy}-kernels',
                 '--filter', settings['BENCH_FILTER']], f'disasm-{host}-{policy}',
-                {'DOTNET_JitDisasm': '*Fp*:* *Fr*:*', 'DOTNET_JitStdOutFile': str(path)}, pinned=True)
+                {'DOTNET_JitDisasm': '*', 'DOTNET_JitDisasmAssemblies': 'Nethermind.Crypto.BlsNet',
+                 'DOTNET_JitStdOutFile': str(path)}, pinned=True)
             if not path.exists() or 'Assembly listing' not in path.read_text():
                 raise RuntimeError(f'JIT disassembly missing: {path}')
 
