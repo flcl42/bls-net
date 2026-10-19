@@ -5,9 +5,9 @@
     <Optimize>true</Optimize>
     <Version>0.1.0-dev</Version>
     <PackageId>Nethermind.Crypto.BlsNet</PackageId>
-    <Description>Pure C# BLS12-381 field, curve, MSM, map-to-curve and pairing operations for public inputs.</Description>
+    <Description>Efficient C# rewrite of Supranational blst: BLS12-381 field, curve, MSM, map-to-curve and pairing operations for public inputs.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/flcl42/blst-net</RepositoryUrl>
+    <RepositoryUrl>https://github.com/flcl42/bls-net</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <IsPackable>true</IsPackable>

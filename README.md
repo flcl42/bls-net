@@ -1,6 +1,6 @@
-# Nethermind.Crypto.BlsNet
+# bls-net
 
-Pure C# BLS12-381 for .NET 10 and .NET 11, without native runtime dependencies: field arithmetic, G1/G2 operations, MSM, map-to-curve and pairing checks for EIP-2537 integration.
+Efficient, pure C# BLS12-381 for .NET 10 and .NET 11, without native runtime dependencies: field arithmetic, G1/G2 operations, MSM, map-to-curve and pairing checks for EIP-2537 integration.
 
 This project is a C# rewrite of [Supranational's blst](https://github.com/supranational/blst), adapting its algorithms, formulas and constants for managed .NET. See [credits and license](#credits-and-license) for attribution and licensing.
 

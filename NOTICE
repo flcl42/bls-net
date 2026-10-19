@@ -1,4 +1,4 @@
-Nethermind.Crypto.BlsNet
+bls-net (Nethermind.Crypto.BlsNet)
 
 This project is a C# rewrite of blst by Supranational, adapting its
 algorithms, formulas and constants for managed .NET.
