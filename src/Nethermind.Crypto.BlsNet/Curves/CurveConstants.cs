@@ -1,4 +1,5 @@
 // Montgomery constants from blst e1.c and e2.c (Apache-2.0).
+// Copyright Supranational LLC. Adapted for this C# rewrite; see NOTICE and LICENSE.
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
 namespace Nethermind.Crypto.BlsNet.Curves;

@@ -1,4 +1,5 @@
 // Addition chain adapted from blst sqrt-addchain.h (Apache-2.0).
+// Copyright Supranational LLC. Adapted for this C# rewrite; see NOTICE and LICENSE.
 using System.Runtime.CompilerServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 using Nethermind.Crypto.BlsNet.Curves;

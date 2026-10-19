@@ -1,4 +1,5 @@
 // Secret-input SSWU ported from blst map_to_g2.c (Apache-2.0).
+// Copyright Supranational LLC. Adapted for this C# rewrite; see NOTICE and LICENSE.
 using System.Runtime.CompilerServices;
 using Nethermind.Crypto.BlsNet.Arithmetic;
 using Nethermind.Crypto.BlsNet.Curves;

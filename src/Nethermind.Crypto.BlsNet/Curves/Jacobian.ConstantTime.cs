@@ -1,4 +1,5 @@
 // Constant-time dadd formula ported from blst ec_ops.h (Apache-2.0).
+// Copyright Supranational LLC. Adapted for this C# rewrite; see NOTICE and LICENSE.
 using Nethermind.Crypto.BlsNet.Arithmetic;
 
 namespace Nethermind.Crypto.BlsNet.Curves;
