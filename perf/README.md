@@ -15,6 +15,7 @@ RUNTIME_REPO=flcl42/runtime
 RUNTIME_REF=74ed610683646896bfd9f22bbbcea93124b44f4a
 RUNTIME_PATCHES=''
 BENCH_REPETITIONS=3
+RUN_MACOS=false
 ```
 
 Prefer a full runtime commit SHA for reproducibility; branch names work too.
@@ -38,10 +39,6 @@ gh run view RUN_ID --repo flcl42/bls-net
 gh run download RUN_ID --repo flcl42/bls-net --name arm64-perf-ubuntu-24.04-arm --dir results
 ```
 
-Push only branches you are authorized to push. These commands are instructions
-for the experiment owner; this pipeline's implementation was pushed only to
-`arm64-perf`.
-
 ## Build and cache
 
 The cold build selects `clr.runtime+clr.corelib+host.native+libs.native+libs.sfx+libs.pretest`
@@ -62,16 +59,41 @@ testhost in the next iteration. Linux and macOS caches are separate. Caches are
 scoped by GitHub to branches: a new experiment branch may need its own cold build
 unless its base is a cache-accessible default branch.
 
-Actual cold and warm build durations are recorded in `timings.txt` and the job
-summary. The [first Linux baseline](baseline-linux-arm64.md) took 15m04s for the
-cold testhost and 16m38s including both JITs; the complete measurement job took
-30m35s. Its cache compressed to 237 MiB. The [JIT-only source-change run](https://github.com/flcl42/bls-net/actions/runs/39309342059)
-restored that exact cache in 2s and built both JITs in **3m18s**, skipping the
-CoreCLR/libraries build. The entire successful Linux JIT-only measurement job
-took **17m12s**, including all correctness/stress tests, benchmarks and disassembly.
-macOS durations are being measured separately.
+Measured durations on hosted ARM64 runners, including all required tests and
+captures in the complete-job columns:
+
+| Runner | Cold testhost | Complete cold job | Warm JIT build step | Complete warm job | Cache |
+|---|---:|---:|---:|---:|---:|
+| Linux, 4-core Neoverse-N2 | 15m04s | 30m35s | 3m12s–3m18s | 17m12s–17m26s | 237 MiB |
+| macOS, 3-core Apple M1, 7 GiB | 27m05s | 44m58s | 4m51s | 20m03s | 233 MiB |
+
+Cold runtime setup including both JITs took 16m38s on Linux and 30m19s on macOS.
+The [JIT-only source-change run](https://github.com/flcl42/bls-net/actions/runs/39309342059)
+applied the comment-only `cache-probe.patch`, restored the exact Linux baseline
+cache in 2s, and built only Release/Checked JITs in 3m18s. The
+[final manual dispatch](https://github.com/flcl42/bls-net/actions/runs/39315754704)
+removed the probe, hit both caches (3s Linux / 7s macOS), and passed again.
+`timings.txt` records script-level seconds; workflow step durations also include
+shell startup and teardown. Shared-runner load can change these durations.
 
 ## Validation and results
+
+Three consecutive workflows finished green: the [first Linux cold baseline](https://github.com/flcl42/bls-net/actions/runs/39304746175),
+the [cache probe and macOS cold run](https://github.com/flcl42/bls-net/actions/runs/39309342059),
+and the [unpatched manual repeat on both platforms](https://github.com/flcl42/bls-net/actions/runs/39315754704).
+This covers three complete Linux jobs and two complete Apple silicon jobs.
+
+Both policies passed **7,595,581 checks with native blst** and **7,285,065 checks
+with `--no-native`** per job. All **21 opt/Add entry points passed in all 20 JIT
+configurations** on both platforms (420 successful entry-point executions per job).
+The cache fingerprint and report calculation checks also passed in CI.
+
+Full stock / patched `74ed6106` / blst tables for both policies are retained in
+the [Linux baseline](baseline-linux-arm64.md) and [macOS baseline](baseline-macos-arm64.md).
+The patched host improves the measured stock timings across the selected rows;
+many rows still exceed blst. Expanded G2 multiplication and 128-point G2 MSM
+are faster than blst in these captures. Read each native column alongside its
+managed result, especially on unpinned macOS.
 
 Builds, tests, and captures execute sequentially within each machine. The library
 and standalone regression runner target net11.0 using stock .NET 11's SDK. The
@@ -111,5 +133,5 @@ are not reliable speed claims.
 
 The patched host is a full .NET 12 source build, compared with stock .NET 11;
 the comparison includes changes throughout the runtime. Scalar and MSM
-comparisons also include library algorithm differences
-from blst. Windows ARM64 has no job in this performance workflow.
+comparisons also include library algorithm differences from blst. Windows ARM64
+has no job in this performance workflow.

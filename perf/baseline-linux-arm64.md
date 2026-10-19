@@ -26,6 +26,13 @@ It restored the same non-JIT cache in 2s, rebuilt Release and Checked JITs in
 3m18s, and completed the entire measurement job in **17m12s**, with all tests
 passing again. This demonstrates a changed JIT source tree taking the warm path.
 
+The [final unpatched manual dispatch](https://github.com/flcl42/bls-net/actions/runs/39315754704)
+passed a third complete Linux measurement in 17m26s. Its runtime build step took
+3m12s (191 script-level seconds), hit the same non-JIT cache, and captured all
+JIT-compiled library methods, including tower and curve helpers. The original
+cold-baseline tables below are retained unchanged; repeat medians are in that
+run's `summary.md` and `medians.json` artifacts.
+
 Runtime: `flcl42/runtime@74ed610683646896bfd9f22bbbcea93124b44f4a`; library: `48bf683b8ab9b58209fe899949f7a176369bd57a`.
 
 Medians of 3 alternating, single-core captures per host/policy; all times in **µs**.
