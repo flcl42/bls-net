@@ -8,6 +8,60 @@ namespace Nethermind.Crypto.BlsNet.Arithmetic;
 
 public readonly partial struct Fp
 {
+    // An isolated leaf preserves carry/select recognition when the caller has
+    // a loop or another large inlined arithmetic body. Both policies share it.
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void SquareArm64(out Fp result, in Fp value) => SquareExpanded(out result, value);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void ReduceWideSmallCorrectArm64(out Fp result, in Fp quotient)
+    {
+        ref ulong m = ref MemoryMarshal.GetArrayDataReference(ModulusLimbs);
+        ulong m0 = m, m1 = Unsafe.Add(ref m, 1), m2 = Unsafe.Add(ref m, 2);
+        ulong m3 = Unsafe.Add(ref m, 3), m4 = Unsafe.Add(ref m, 4), m5 = Unsafe.Add(ref m, 5);
+        ulong mask = 0UL - (quotient._l5 >> 63), carry = 0;
+        ulong h0 = AddCarry(quotient._l0, m0 & mask, ref carry);
+        ulong h1 = AddCarry(quotient._l1, m1 & mask, ref carry);
+        ulong h2 = AddCarry(quotient._l2, m2 & mask, ref carry);
+        ulong h3 = AddCarry(quotient._l3, m3 & mask, ref carry);
+        ulong h4 = AddCarry(quotient._l4, m4 & mask, ref carry);
+        ulong h5 = AddCarry(quotient._l5, m5 & mask, ref carry);
+        ReduceArm64(out result, h0, h1, h2, h3, h4, h5, m0, m1, m2, m3, m4, m5);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void SubtractArm64(out Fp result, in Fp left, in Fp right)
+    {
+        // Loading the modulus saves the MOVZ/MOVK sequences for six constants.
+        // The final addition supplies exactly the flags needed for selection.
+        ref ulong m = ref MemoryMarshal.GetArrayDataReference(ModulusLimbs);
+        SubtractArm64(out result, left, right, m, Unsafe.Add(ref m, 1), Unsafe.Add(ref m, 2),
+            Unsafe.Add(ref m, 3), Unsafe.Add(ref m, 4), Unsafe.Add(ref m, 5));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void SubtractArm64(out Fp result, in Fp left, in Fp right,
+        ulong m0, ulong m1, ulong m2, ulong m3, ulong m4, ulong m5)
+    {
+        ulong borrow = 0;
+        ulong r0 = SubBorrow(left._l0, right._l0, ref borrow);
+        ulong r1 = SubBorrow(left._l1, right._l1, ref borrow);
+        ulong r2 = SubBorrow(left._l2, right._l2, ref borrow);
+        ulong r3 = SubBorrow(left._l3, right._l3, ref borrow);
+        ulong r4 = SubBorrow(left._l4, right._l4, ref borrow);
+        ulong r5 = SubBorrow(left._l5, right._l5, ref borrow);
+        ulong carry = 0;
+        ulong s0 = AddCarry(r0, m0, ref carry);
+        ulong s1 = AddCarry(r1, m1, ref carry);
+        ulong s2 = AddCarry(r2, m2, ref carry);
+        ulong s3 = AddCarry(r3, m3, ref carry);
+        ulong s4 = AddCarry(r4, m4, ref carry);
+        ulong s5 = AddCarry(r5, m5, ref carry);
+        ulong mask = ChoiceToMask(carry);
+        result = new Fp(Select(s0, r0, mask), Select(s1, r1, mask), Select(s2, r2, mask),
+            Select(s3, r3, mask), Select(s4, r4, mask), Select(s5, r5, mask));
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     internal static void MultiplyWideArm64(out FpWide result, in Fp left, in Fp right)
     {

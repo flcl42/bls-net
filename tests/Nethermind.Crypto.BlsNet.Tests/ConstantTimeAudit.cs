@@ -24,6 +24,7 @@ internal static class ConstantTimeAudit
         Fr secret = Fr.FromLittleEndianConstantTime(scalar); secret.ToLittleEndianConstantTime(scalar);
         Fp.Add(out Fp ar, a, a); Fp.Subtract(out ar, ar, a);
         Fp.Negate(out ar, ar); Fp.Multiply(out ar, ar, a); Fp.Square(out ar, ar);
+        Fp.SquareArm64(out ar, ar);
         // Exercise the isolated ARM64 leaf on the x64 AltJit host as well.
         // Its portable high-half fallback is checked by the kernel tests.
         Fp.MultiplyArm64(out ar, ar, a);

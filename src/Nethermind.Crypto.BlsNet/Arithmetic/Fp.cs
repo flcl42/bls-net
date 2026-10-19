@@ -189,6 +189,11 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Subtract(out Fp result, in Fp left, in Fp right)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            SubtractArm64(out result, left, right);
+            return;
+        }
         ulong borrow = 0;
         ulong r0 = SubBorrow(left._l0, right._l0, ref borrow);
         ulong r1 = SubBorrow(left._l1, right._l1, ref borrow);
@@ -372,6 +377,11 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void Square(out Fp result, in Fp value)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            SquareArm64(out result, value);
+            return;
+        }
         if (UseExpandedKernels) SquareExpanded(out result, value);
         else Multiply(out result, value, value);
     }

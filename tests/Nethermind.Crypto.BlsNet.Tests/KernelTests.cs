@@ -148,6 +148,20 @@ internal static unsafe partial class TowerTests
     }
     private static void TestKernelPair(in Fp a, in Fp b, BigInteger x, BigInteger y)
     {
+        Fp.SubtractArm64(out Fp armDifference, a, b);
+        CheckReduced(armDifference, x - y, "ARM64 subtraction vs BigInteger");
+        Fp armSubtractAlias = a;
+        Fp.SubtractArm64(out armSubtractAlias, armSubtractAlias, b);
+        Check(Fp.AreEqual(armSubtractAlias, armDifference), "ARM64 subtraction left alias");
+        armSubtractAlias = b;
+        Fp.SubtractArm64(out armSubtractAlias, a, armSubtractAlias);
+        Check(Fp.AreEqual(armSubtractAlias, armDifference), "ARM64 subtraction right alias");
+        Fp negativeQuotient = RawField(R - x);
+        Fp.ReduceWideSmallCorrectArm64(out Fp corrected, negativeQuotient);
+        CheckReduced(corrected, -x, "ARM64 signed small correction");
+        Fp positiveQuotient = RawField(x + P);
+        Fp.ReduceWideSmallCorrectArm64(out corrected, positiveQuotient);
+        CheckReduced(corrected, x, "ARM64 positive small correction");
         Fp.MultiplyArm64(out Fp armProduct, a, b);
         CheckReduced(armProduct, x * y * RInverse, "ARM64 row product vs BigInteger");
         Fp armAlias = a;
@@ -212,6 +226,8 @@ internal static unsafe partial class TowerTests
         Fp alias = a; Fp.AddUnreduced(out alias, alias, b); Check(Raw(alias) == x + y, "unreduced sum left alias");
         alias = b; Fp.AddUnreduced(out alias, a, alias); Check(Raw(alias) == x + y, "unreduced sum right alias");
         Fp.Square(out Fp square, a); CheckReduced(square, x * x * RInverse, "Fp square BigInteger");
+        Fp.SquareArm64(out Fp armSquare, a); CheckReduced(armSquare, x * x * RInverse, "ARM64 square BigInteger");
+        Fp.SquareArm64(out armSquare, armSquare); CheckReduced(armSquare, x * x * x * x * RInverse * RInverse * RInverse, "ARM64 square alias");
         if (NativeAvailable) { KernelNative.blst_fp_sqr(out Fp native, a); Check(Fp.AreEqual(square, native), "Fp dedicated native square"); }
         alias = a; Fp.Square(out alias, alias); Check(Fp.AreEqual(alias, square), "Fp square alias");
         Fp.Halve(out Fp half, a); CheckReduced(half, (x + (x.IsEven ? 0 : P)) / 2, "Fp halve raw BigInteger");

@@ -126,7 +126,34 @@ Expanded beats compact on ARM64 even on .NET 10, unlike x64, so ARM64 defaults t
 | map G1 | 98.043 | 58.226 | 44.777 |
 | map G2 | 355.490 | 211.078 | 160.484 |
 
-The cold runtime/testhost plus both JITs took 998 seconds. All library suites and all twenty Release/Checked stress/tiering configurations passed. Native timings remain specific to each capture; the table uses the patched process's native medians. Candidate hardware measurements follow after pipeline validation.
+The cold runtime/testhost plus both JITs took 998 seconds. All library suites and all twenty Release/Checked stress/tiering configurations passed. Native timings remain specific to each capture; the table uses the patched process's native medians.
+
+### First ARM64 candidate on hardware
+
+[Run 39314252575](https://github.com/flcl42/bls-net/actions/runs/39314252575) measures library `2441b94` with runtime `8a918efe`, three alternating captures per host/policy on a pinned Neoverse-N2 core. All 7,936,156 native-comparison checks pass under both policies; all 23 JIT entry points pass in all twenty Release/Checked stress/tiering configurations. The table covers regular operations using expanded kernels; all values are **µs**. The earlier patched column uses the original library and runtime `74ed6106`. Stock uses the candidate library and .NET 11 RC2. Its ARM64 carry-row formulations are intended for the patched JIT and can cost more on stock ARM64.
+
+| Operation | Stock | Patched before | First candidate | blst |
+|---|---:|---:|---:|---:|
+| Fp multiply | 0.112 | 0.050 | 0.036 | 0.039 |
+| Fp square | 0.093 | 0.042 | 0.053 | 0.034 |
+| Fp2 multiply | 0.336 | 0.153 | 0.115 | 0.113 |
+| Fp2 square | 0.243 | 0.109 | 0.078 | 0.085 |
+| Fr mul+add | 0.047 | 0.029 | 0.024 | 0.024 |
+| Fp mul+add | 0.130 | 0.059 | 0.041 | 0.045 |
+| Fp inverse, kernel | 3.343 | 2.946 | 2.799 | 2.855 |
+| Fp inverse, same inputs | 3.493 | 3.064 | 2.909 | 2.858 |
+| Fp12 multiply | 6.033 | 2.992 | 2.136 | 2.157 |
+| Pairing check 2 | 2381.059 | 1167.972 | 824.631 | 853.741 |
+| G1 multiply | 196.814 | 100.259 | 69.610 | 89.027 |
+| G2 multiply | 369.900 | 174.549 | 127.621 | 183.174 |
+| G1 MSM 128 | 8096.782 | 4034.174 | 2883.832 | 3409.505 |
+| G2 MSM 128 | 14994.903 | 7326.774 | 5566.585 | 9168.354 |
+| map G1 | 116.700 | 58.226 | 43.874 | 44.777 |
+| map G2 | 446.087 | 211.078 | 156.134 | 160.470 |
+
+This is an intermediate measurement, not a parity claim. Expanded Fp square's loop caller materializes carries despite the efficient isolated arithmetic listing. Fp2 multiply, Fr mul+add and the same-input variable inverse also need further measurements or improvements. The unfiltered quick sweep measures Fp12 square once at 1.548 µs versus blst's 1.544 µs; it needs repeated confirmation. Regular operations are the speed targets; constant-time paths remain correctness and generated-code security requirements. The paired constant-time inversion experiment is shelved locally and is not part of the branch.
+
+The next library candidate isolates ARM64 square, uses four-limb Fr carry rows, loads Fp subtraction's modulus, and reuses that modulus for signed small-wide correction. Local ARM64 counts are 302 for the square leaf, 204 for the Fr mul+add benchmark entry (previously 263), 43 for Fp subtraction (previously 56), and 244 for difference-plus-REDC (previously 265). Both policies pass 8,047,464 local native-comparison checks. All 171 common x64 library instruction listings remain identical to the original. Hardware validation of this follow-up is pending.
 
 ### ARM64 generated code
 

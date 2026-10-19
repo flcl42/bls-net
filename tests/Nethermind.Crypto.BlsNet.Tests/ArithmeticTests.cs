@@ -16,6 +16,7 @@ internal static class ArithmeticTests
         Run("Fr round-trips and rejects non-canonical input", TestFrParsing);
         Run("Fp round-trips and rejects non-canonical input", TestFpParsing);
         Run("Fr arithmetic matches BigInteger", () => TestFrArithmetic(frModulus));
+        Run("ARM64 Fr carry rows preserve results and aliases", () => TestFrArm64(frModulus));
         Run("Fp arithmetic matches BigInteger", () => TestFpArithmetic(fpModulus));
         Run("Fr arithmetic matches BigInteger on edge values", () => TestFrEdgeArithmetic(frModulus));
         Run("Fp arithmetic matches BigInteger on edge values", () => TestFpEdgeArithmetic(fpModulus));
@@ -80,6 +81,29 @@ internal static class ArithmeticTests
             AssertEqualFp(Mod(ai * bi, modulus), a.Multiply(b), modulus);
             AssertEqualFp(Mod(ai * ai, modulus), a.Square(), modulus);
         }
+    }
+
+    private static void TestFrArm64(BigInteger modulus)
+    {
+        Fr[] edges = EdgeValues(modulus, 256).Select(x =>
+        {
+            byte[] bytes = new byte[32]; WriteBigEndian(x, bytes);
+            Assert(Fr.TryFromBigEndian(bytes, out Fr value), "ARM64 Fr edge import");
+            return value;
+        }).ToArray();
+        void Pair(Fr a, Fr b)
+        {
+            Fr.MultiplyArm64(out Fr product, a, b);
+            Assert(product == a.Multiply(b), "ARM64 Fr product matches portable kernel");
+            Fr alias = a; Fr.MultiplyArm64(out alias, alias, b);
+            Assert(alias == product, "ARM64 Fr left alias");
+            alias = b; Fr.MultiplyArm64(out alias, a, alias);
+            Assert(alias == product, "ARM64 Fr right alias");
+            Fr.MultiplyArm64(out product, a, a);
+            Assert(product == a.Square(), "ARM64 Fr square");
+        }
+        foreach (Fr a in edges) foreach (Fr b in edges) Pair(a, b);
+        for (int i = 0; i < 10000; i++) Pair(RandomFr(out _), RandomFr(out _));
     }
 
     // Values next to the modulus, plus values whose Montgomery limbs (value * R mod modulus) sit next to
