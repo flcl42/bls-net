@@ -7,7 +7,7 @@
     <PackageId>Nethermind.Crypto.BlsNet</PackageId>
     <Description>Pure C# BLS12-381 field, curve, MSM, map-to-curve and pairing operations for public inputs.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/flcl42/blst</RepositoryUrl>
+    <RepositoryUrl>https://github.com/flcl42/blst-net</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <IsPackable>true</IsPackable>
@@ -15,5 +15,6 @@
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
     <None Include="../../NOTICE" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

@@ -2,6 +2,8 @@
 
 Pure C# BLS12-381 for .NET 10 and .NET 11, without native runtime dependencies: field arithmetic, G1/G2 operations, MSM, map-to-curve and pairing checks for EIP-2537 integration.
 
+This project is a C# rewrite of [Supranational's blst](https://github.com/supranational/blst), adapting its algorithms, formulas and constants for managed .NET. See [credits and license](#credits-and-license) for attribution and licensing.
+
 Development status: implemented and covered by reference, algebraic, alias/allocation and optional native differential tests. Release packaging and broader platform validation remain open. Original APIs are variable-time for public inputs. Explicit constant-time field inversion, scalar multiplication, point helpers and maps are available; see [contracts and limits](docs/design.md#constant-time-apis) and the [runtime audit](docs/constant-time-validation.md). Scalar multiplication and MSM require subgroup points; check the curve before checking the subgroup. Pairing callers must validate both. Complete secret-key support, BLS signatures, message hash-to-curve with DST, and compressed/uncompressed point encodings remain open. See [design](docs/design.md) and [roadmap](docs/roadmap.md).
 
 ## Usage
@@ -89,4 +91,6 @@ Stock RyuJIT materializes carries through comparisons and integer values. PR #13
 
 ## Credits and license
 
-Algorithms, formulas and constants derive from [Supranational blst](https://github.com/supranational/blst), pinned at `f62244ef50ad1a603decdb8f215e982d2a467bb6` for differential tests and benchmarks. Distributed under [Apache-2.0](LICENSE); see [NOTICE](NOTICE).
+This C# rewrite adapts algorithms, formulas and constants from [Supranational blst](https://github.com/supranational/blst), copyright Supranational LLC. The upstream reference is pinned at [`f62244ef50ad1a603decdb8f215e982d2a467bb6`](https://github.com/supranational/blst/tree/f62244ef50ad1a603decdb8f215e982d2a467bb6) for differential tests and benchmarks. The managed implementation and upstream blst are distributed under [Apache-2.0](LICENSE); see [NOTICE](NOTICE). The C# rewrite changes the implementation language, runtime, APIs and optimizations; existing source notices identify specific adaptations.
+
+The optional .NET runtime patches in `jit/` are distributed under their separate [MIT license](jit/LICENSE), with attribution in [NOTICE](NOTICE).

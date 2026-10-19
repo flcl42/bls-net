@@ -1,5 +1,7 @@
 # Carry and select lowering
 
+The patches in this directory modify [dotnet/runtime](https://github.com/dotnet/runtime) and are distributed under the [MIT License](LICENSE), copyright (c) .NET Foundation and Contributors.
+
 Apply `followup.patch` to dotnet/runtime **0a303c9**, the merged PR #134039 head. The combined patch contains the carry-row follow-up and the inverse-select addition below; [draft PR #3](https://github.com/benaadams/runtime/pull/3) carries them as two commits. It changes no managed runtime or instruction-set APIs. The existing carry-row changes are:
 
 * Recognize independent multiply-accumulate rows even when another product in the block is not a row lane. A square's diagonal products previously prevented its cross-product rows from using ADCX/ADOX. Rejected lanes remain untouched and terminate a candidate row; all original single-use, interference and flag-preservation checks still apply.

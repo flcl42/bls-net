@@ -1,9 +1,19 @@
 Nethermind.Crypto.BlsNet
 
-Algorithms, formulas and constants are ported from blst by Supranational,
+This project is a C# rewrite of blst by Supranational, adapting its
+algorithms, formulas and constants for managed .NET.
 https://github.com/supranational/blst, commit
 f62244ef50ad1a603decdb8f215e982d2a467bb6.
 
 blst copyright (c) 2019-2020 Supranational LLC.
 The port and upstream blst are distributed under the Apache License 2.0.
 See LICENSE.
+
+The rewrite changes the implementation language, runtime, APIs and
+optimizations. Upstream copyright and source attribution notices are
+retained in the adapted files.
+
+The optional patches jit/followup.patch and jit/inverse-selects.patch
+modify dotnet/runtime, https://github.com/dotnet/runtime.
+Copyright (c) .NET Foundation and Contributors.
+These patches are distributed under the MIT License; see jit/LICENSE.
