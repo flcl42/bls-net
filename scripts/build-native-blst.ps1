@@ -25,7 +25,13 @@ if ($Architecture -eq 'arm64') {
     Push-Location $outputRoot
     try {
         if (Test-Path -LiteralPath 'blst.dll') { Remove-Item -LiteralPath 'blst.dll' -Force }
-        & $env:ComSpec /d /c "`"`"$vcvars`" $hostArchitecture && call `"$build`" -shared`""
+        # A batch file avoids nested cmd /c quoting, which PowerShell 7 escapes
+        # in a form cmd does not parse when the paths contain spaces.
+        $script = Join-Path $outputRoot 'build-arm64.cmd'
+        Set-Content -LiteralPath $script -Encoding ascii -Value @(
+            "@call `"$vcvars`" $hostArchitecture || exit /b 1",
+            "@call `"$build`" -shared || exit /b 1")
+        & $env:ComSpec /d /c $script
         if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath 'blst.dll')) { throw 'MSVC ARM64 blst build failed.' }
         Get-Item -LiteralPath 'blst.dll'
     } finally { Pop-Location }
