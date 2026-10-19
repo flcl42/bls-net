@@ -55,6 +55,8 @@ jobs:
           echo "RUNTIME_REPO=$RUNTIME_REPO" >> "$GITHUB_ENV"
           echo "RUNTIME_REF=$RUNTIME_REF" >> "$GITHUB_ENV"
           echo "STOCK_DOTNET=$(command -v dotnet)" >> "$GITHUB_ENV"
+      - name: Verify cache fingerprints and report calculations
+        run: python3 -m unittest discover -s perf -p 'test_*.py' -v
       - uses: actions/checkout@v5
         with:
           repository: ${{ env.RUNTIME_REPO }}
@@ -100,12 +102,17 @@ jobs:
         run: python3 perf/measure.py bench
       - name: Publish median table
         run: python3 perf/report.py artifacts/perf
+      - name: Collect runtime build logs
+        if: always()
+        run: |
+          mkdir -p artifacts/perf
+          if [[ -d .perf-runtime/artifacts/log ]]; then
+            cp -a .perf-runtime/artifacts/log artifacts/perf/runtime-build-logs
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: arm64-perf-${{ matrix.os }}
-          path: |
-            artifacts/perf
-            .perf-runtime/artifacts/log
+          path: artifacts/perf
           retention-days: 30
           if-no-files-found: warn

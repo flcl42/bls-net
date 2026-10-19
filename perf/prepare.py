@@ -23,6 +23,19 @@ def config():
     return json.loads(result)
 
 
+def source_records(runtime, index):
+    env = dict(os.environ, GIT_INDEX_FILE=str(index))
+    try:
+        subprocess.run(['git', '-C', str(runtime), 'read-tree', 'HEAD'], env=env, check=True)
+        subprocess.run(['git', '-C', str(runtime), 'add', '-A'], env=env, check=True)
+        records = subprocess.check_output(['git', '-C', str(runtime), 'ls-files', '-s', '-z'], env=env)
+        nonjit = b'\0'.join(record for record in records.split(b'\0') if record and
+                            not record.split(b'\t', 1)[1].startswith((b'src/coreclr/jit/', b'src/tests/JIT/')))
+        return records, nonjit
+    finally:
+        index.unlink(missing_ok=True)
+
+
 if __name__ == '__main__':
     settings = config()
     patches = []
@@ -35,20 +48,15 @@ if __name__ == '__main__':
     # Tree records contain blob ID, path and mode. Include working-tree patch changes
     # (including additions) using a private index, never changing the checkout's index.
     index = ROOT / 'artifacts/perf/runtime.index'
-    env = dict(os.environ, GIT_INDEX_FILE=str(index))
-    subprocess.run(['git', '-C', str(RUNTIME), 'read-tree', 'HEAD'], env=env, check=True)
-    subprocess.run(['git', '-C', str(RUNTIME), 'add', '-A'], env=env, check=True)
-    records = subprocess.check_output(['git', '-C', str(RUNTIME), 'ls-files', '-s', '-z'], env=env)
-    nonjit = b'\0'.join(record for record in records.split(b'\0') if record and
-                        not record.split(b'\t', 1)[1].startswith((b'src/coreclr/jit/', b'src/tests/JIT/')))
+    records, nonjit = source_records(RUNTIME, index)
     # Keep build flags/version in the key too; no unsafe restore-key fallback.
     recipe = (ROOT / 'perf/build-runtime.sh').read_bytes()
     compiler = subprocess.check_output(['clang', '--version'])
     key = hashlib.sha256(nonjit + recipe + compiler).hexdigest()
-    index.unlink()
     metadata = {'runtime_repo': settings['RUNTIME_REPO'], 'runtime_ref': settings['RUNTIME_REF'],
                 'runtime_commit': git('rev-parse', 'HEAD').decode().strip(), 'patches': patches,
-                'nonjit_key': key, 'library_commit': subprocess.check_output(
+                'nonjit_key': key, 'effective_source_sha256': hashlib.sha256(records).hexdigest(),
+                'library_commit': subprocess.check_output(
                     ['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip(),
                 'compiler': compiler.decode(), 'settings': {k: settings[k] for k in
                     ('BENCH_FILTER', 'BENCH_REPETITIONS', 'RUN_MACOS')}}

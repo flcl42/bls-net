@@ -56,6 +56,8 @@ def main(out):
              '', f'Medians of {repetitions} alternating, single-core captures per host/policy; all times in **µs**.',
              'Each host measures native blst in the same process. Ratios use that host’s own native median.',
              'ReadyToRun and tiering are disabled. The harness reports best rounds; shared-runner noise remains.', '']
+    for patch in source.get('patches', []):
+        lines += [f"Additional runtime patch: `{patch['path']}` (SHA-256 `{patch['sha256']}`).", '']
     if (out / 'timings.txt').exists():
         lines += ['```text', (out / 'timings.txt').read_text().strip(), '```', '']
     executions = [json.loads(line) for line in (out / 'executions.jsonl').read_text().splitlines()]

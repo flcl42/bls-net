@@ -12,12 +12,14 @@ public static class RunnerMain
         int failed = 0, passed = 0;
         foreach (var type in typeof(RunnerMain).Assembly.GetTypes())
         foreach (var method in type.GetMethods(System.Reflection.BindingFlags.Public |
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static))
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly))
         {
             if (!System.Attribute.IsDefined(method, typeof(Xunit.FactAttribute))) continue;
             try
             {
-                var result = method.Invoke(null, null);
+                object instance = method.IsStatic ? null : System.Activator.CreateInstance(type, nonPublic: true);
+                var result = method.Invoke(instance, null);
                 if (result is int code && code != 100 && code != 0)
                     throw new System.Exception("returned " + code);
                 if (result is not null && result is not int)
