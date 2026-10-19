@@ -50,6 +50,32 @@ Build/install the runtime using [jit/README.md](../jit/README.md). A stock .NET 
 
 The quick harness warms its loops and reports best-round samples, not means or confidence intervals. Secret and variable-time comparisons use identical inputs and loop shapes. Native calls include ABI overhead; internal native calls may cost less. Shared VM clocks/cache contention makes a few percent weak evidence. See [validation](constant-time-validation.md) for the full host/policy correctness matrix, code review and separate 20,000-sample timing experiment. Statistical non-detection does not prove constant time.
 
+## ARM64 portability regression capture
+
+Captured 2026-10-19 on the same x64 VM, stock .NET 10.0.12 / .NET 11 RC1 and the recorded patched host. These changes add platform infrastructure and correct test interop; production arithmetic is unchanged. There is no ARM64 speed claim or measured arithmetic optimization.
+
+Before is a clean archive of the parent revision; after is this checkout, built with the same SDK. Each row is the median of three alternating before/after `--quick` runs, tiering disabled, processor 3 pinned, native enabled, and the appropriate net10.0/net11.0 executable. Root and Major roll-forward are explicit for every host. Initial unpaired captures had substantial scheduler/native noise; the paired results below replace them. Values are **before / after**; this small sample does not establish statistical significance.
+
+| Host / policy | Fp multiply ns | Fp square ns | Fp2 multiply ns | Fp2 square ns |
+|---|---:|---:|---:|---:|
+| .NET 10 compact | 55.05 / 52.30 | 53.38 / 54.51 | 194.47 / 196.09 | 128.99 / 121.90 |
+| .NET 10 expanded | 52.55 / 52.53 | 48.67 / 48.97 | 266.67 / 265.60 | 209.40 / 199.50 |
+| .NET 11 compact | 51.47 / 51.14 | 52.78 / 53.28 | 194.95 / 193.39 | 120.50 / 119.87 |
+| .NET 11 expanded | 52.05 / 51.56 | 45.12 / 45.94 | 152.50 / 152.46 | 115.34 / 114.39 |
+| Patched compact | 19.21 / 19.29 | 19.03 / 19.29 | 68.84 / 68.85 | 44.38 / 44.83 |
+| Patched expanded | 19.56 / 19.52 | 17.77 / 17.84 | 62.64 / 61.75 | 42.34 / 43.02 |
+
+| Host / policy | CT Fp inverse µs | G1 MSM 128 ms | G2 MSM 128 ms |
+|---|---:|---:|---:|
+| .NET 10 compact | 3.78 / 3.71 | 7.104 / 7.220 | 12.790 / 12.765 |
+| .NET 10 expanded | 3.98 / 3.70 | 7.087 / 7.266 | 11.845 / 11.589 |
+| .NET 11 compact | 3.11 / 3.10 | 4.227 / 4.165 | 11.284 / 11.269 |
+| .NET 11 expanded | 3.07 / 3.14 | 3.933 / 3.923 | 7.158 / 6.956 |
+| Patched compact | 1.72 / 1.75 | 1.611 / 1.613 | 4.123 / 4.153 |
+| Patched expanded | 1.75 / 1.75 | 1.559 / 1.595 | 2.971 / 3.006 |
+
+Use `--filter 'Fp multiply|Fp square|Fp2 multiply|Fp2 square|CT Fp inverse|G1 MSM 128|G2 MSM 128'` with the reproduction settings above. [ARM64 code-generation findings](constant-time-validation.md#hot-kernel-findings-and-policy) explain why the existing policy is retained. Emulated timings are excluded; CI uploads both policies' managed/native results from real ARM64 runners for subsequent assessment.
+
 ## EIP-2537 precompiles
 
 Nethermind's BenchmarkDotNet in-process Short job measures complete precompiles. Native is Nethermind.Crypto.Bls 0.3.17.15; managed uses the same parsing, validation and output encoding over net10.0 sources. Stock is .NET 10.0.12; the carry-aware host identifies itself as .NET 12.0.0-dev.

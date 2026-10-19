@@ -52,6 +52,109 @@ Reproduce after building both executable targets:
 
 Use net10.0 for stock .NET 10. The script sets/restores root, roll-forward, ReadyToRun, tiering and diagnostic settings. Review `disassembly.txt`, `jumps.tsv`, `addresses.tsv`, `calls.tsv`, `methods.txt`, `external-calls.txt` and `variable-latency-candidates.txt`; the inventory alone is not a pass/fail security test.
 
+## ARM64 validation
+
+Extended 2026-10-19 with stock .NET 10.0.12 and .NET 11.0.0-rc.1.26425.128. Production arithmetic and the runtime-based kernel default are unchanged. This is a manual control-flow/address review, not an independent security audit or a claim about physical ARM CPU latency.
+
+### Cross-compilation
+
+The matching `Microsoft.NETCore.App.Crossgen2.win-x64` NuGet packages provide the stock cross-targeting ARM64 JIT. Six optimized composite captures target Linux, macOS and Windows using each target's ARM64 runtime-pack managed assemblies. **Do not use the host x64 CoreLib:** its architecture-specific intrinsic bodies change the result, including widening multiplication. The audit script rejects an x64 CoreLib.
+
+Crossgen2 skips `AggressiveOptimization` methods. The script clears only that MethodDef implementation flag in disposable input copies, preserving IL and other attributes; production binaries are untouched. Without this step, the inverses, hot kernels and audit root would be absent. These outputs are inspection artifacts, not deployment binaries. Both runtime policy paths remain in R2R code. Relocation/static-initialization checks and indirect calls can differ substantially from runtime FullOpts/Tier1, so these captures supplement the actual runtime listings below.
+
+```powershell
+./scripts/audit-constant-time.ps1 -Crossgen2 '<crossgen2-package>/tools/crossgen2.exe' `
+  -RuntimeDirectory '<target-runtime-package>/runtimes/linux-arm64/lib/net11.0' `
+  -TargetFramework net11.0 -TargetOS linux -OutputDirectory artifacts/audit-arm64-r2r
+# Repeat with matching 10.0.12/net10.0, osx-arm64/-TargetOS osx,
+# and win-arm64/-TargetOS windows runtime packs.
+python scripts/test-disassembly-inventory.py
+```
+
+The inventory recognizes ARM64 `b.<cond>` and RyuJIT aliases such as `bge`/`blo`, `cbz/cbnz`, `tbz/tbnz`, direct and indirect calls/tail branches/returns, and `udiv/sdiv`. `csel/csinc/cset/csetm/cneg` are selections, not branches. `addresses.tsv` retains every address operand; `indexed-addresses.tsv` highlights register-indexed operands for data-flow review. Fixed stack/relocation operands remain visible too. No mnemonic-only check can determine whether an index is secret. Repeated identically named tiered versions are now retained rather than overwritten.
+
+| Stock crossgen2 | ARM64 target | Compiled versions (whole inventory) | Division candidates |
+|---|---|---:|---:|
+| .NET 10.0.12 | Linux | 766 | 6, public MSM |
+| .NET 10.0.12 | macOS | 766 | 6, public MSM |
+| .NET 10.0.12 | Windows | 766 | 6, public MSM |
+| .NET 11 RC1 | Linux | 768 | 6, public MSM |
+| .NET 11 RC1 | macOS | 768 | 6, public MSM |
+| .NET 11 RC1 | Windows | 768 | 6, public MSM |
+
+Review of the secret API bodies and their arithmetic helpers found no secret-dependent conditional branch or dereferenced address in these six targets. All six full inventories contain six division candidates in variable-time public MSM sizing/window code, outside the secret APIs. Policy/type/static initialization, public lengths, fixed schedules, stack probes and coefficient-array bounds explain the remaining branches. R2R unresolved relocation calls are explicitly inventoried with `--all-methods`; that scope includes variable-time APIs and the test runner and must not be mistaken for an automatically proven secret call graph.
+
+### Linux ARM64 runtime code
+
+QEMU AArch64 8.2.2 on Ubuntu 24.04.3 produced actual ARM64 runtime JIT listings with ReadyToRun and tiering disabled. The emulated process reports Arm64 and linux-arm64; the underlying WSL2 host is x64. The launcher uses `QEMU_CPU=cortex-a72`, `DOTNET_EnableWriteXorExecute=0`, normal ARM64 ICU, four reported processors and a 2 GiB GC heap limit. Captures include the original audit driver plus a preparation probe forcing standalone multiply/square and inversion-loop bodies, without changing their attributes. These source kernels are identical to this checkout's production code.
+
+| Runtime / policy | Inventory scope | Compiled versions / branches | Division candidates |
+|---|---|---:|---:|
+| .NET 10 compact | All captured methods | 440 / 1,869 | 13, runtime startup/formatting |
+| .NET 10 expanded | All captured methods | 459 / 1,874 | 13, runtime startup/formatting |
+| .NET 11 compact | Reached audit graph | 151 / 194 | 0 |
+| .NET 11 expanded | Reached audit graph | 170 / 200 | 0 |
+
+.NET 10's ARM64 indirect calls lack symbolic target annotations. Its graph inventory alone reaches only the root and warns about missing closure; review therefore covered all captured library bodies, with no division in any of them. .NET 11's annotations allow graph traversal. Counts have different scopes and are not comparable security scores.
+
+Four additional 1,024-iteration warm captures from this checkout include Tier0, instrumented Tier0, Tier0-FullOpts and Tier1:
+
+| Runtime / policy | Inventory scope | Versions / branches | Division candidates |
+|---|---|---:|---:|
+| .NET 10 compact | All captured methods | 1,645 / 2,831 | 12, public runtime initialization/formatting |
+| .NET 10 expanded | All captured methods | 1,679 / 2,846 | 12, public runtime initialization/formatting |
+| .NET 11 compact | Reached audit graph | 621 / 422 | 0 |
+| .NET 11 expanded | Reached audit graph | 659 / 438 | 0 |
+
+No secret-dependent branch or dereferenced address was found in those versions. The .NET 10 whole-capture inventory also includes ordinary variable-time helpers used before the audit root during constant initialization; for example, `Fp2.EqualsZero` short-circuits there and is absent from the annotated .NET 11 secret graph. Tiered `br x0` sites follow `CORINFO_HELP_PATCHPOINT` and use its public OSR target, not a scalar-derived address. Additional serialization bounds checks use public destination lengths; cofactor schedule branches use public fixed step counts.
+
+The provided emulator runner was reused in an isolated ignored directory, with its native-build hook invoking this checkout's shell script. This checkout passed all six full-suite cases below, with tiering disabled and warning-free self-contained publishes. Both processes identify as Arm64 and load an AArch64 blst shared library built from the pinned assembly sources. The independent baseline matrix also passed all 16 runtime × policy × native-on/off × default/disabled-tiering cases on the unchanged production arithmetic.
+
+| Executable/runtime | Native compact | Native expanded | Managed-only default |
+|---|---:|---:|---:|
+| net10.0 / .NET 10.0.12 | 7,595,581 | 7,595,581 | 7,285,065 |
+| net11.0 / .NET 11 RC1 | 7,595,581 | 7,595,581 | 7,285,065 |
+
+These totals include 12 native-enabled / seven managed-only portability checks, covering sizes/offsets, little-endian layout, integer predicate returns and conditional-negation flags 0, 1, 256 and -1. Native-enabled runs use `--require-native`, so a missing reference cannot silently pass.
+
+In both runtimes, inversion comparisons feed `cset`/masks, normalization feeds `clz`/shifts, and update/cofactor leaf kernels have no conditional branches or calls. `Steps31` has one fixed counter backedge; `Finish` checks and decrements its public count. Scalar multiplication scans every table entry. Branches emitted for UInt128 shifts depend on the public window offset, not the scalar; indexed table/digit accesses use component/scan counters. Isogeny branches use fixed polynomial lengths, degree parity and loop counters. Map branches loading polynomial arrays test public references and static initialization. Secret exceptional points, signs and root choices stay in arithmetic masks. Indirect targets are runtime entry cells/type-specialized methods; secret limbs do not form call targets. No source security fix was necessary.
+
+### Hot-kernel findings and policy
+
+Actual runtime preparation captures give the following code sizes; these are static bytes, not timings or dynamic instruction counts.
+
+| Kernel | .NET 10 ARM64 bytes | .NET 11 ARM64 bytes |
+|---|---:|---:|
+| Fp MultiplyComposite | 1,508 | 1,508 |
+| Fp MultiplyWide compact / expanded | 352 / 1,372 | 352 / 1,372 |
+| Fp SquareExpanded | 1,984 | 1,984 |
+| Fp2 Multiply compact / expanded | 652 / 668 | 652 / 668 |
+| Fp2 Square compact / expanded | 588 / 3,620 | 588 / 3,616 |
+| InverseBatch Steps31 / Finish | 224 / 172 | 224 / 172 |
+| G1 XYZZ Add / AddAffine | 684 / 716 | 684 / 716 |
+| G2 XYZZ Add / AddAffine | 852 / 1,112 | 852 / 1,112 |
+
+Widening products use `mul`/`umulh`, with no missing multiplication intrinsic in the hot runtime leaf bodies. Stock carries still materialize through compare/`cset`/add chains. Expanded raw multiplication removes loop control but increases code size; expanded Fp square saves widening products (57 versus 72 dynamically). Expanded Fp2 multiplication reduces raw products before canonicalization, while its square inlines two CIOS products and increases register pressure: 35 stack-referencing instructions versus 12 in the compact wrapper, including saved registers rather than solely spills. Leaf field products/reducers have fixed loop bounds and no range-check failure calls. Inversion orchestration retains intentional helper boundaries. Actual full-suite captures also cover public MSM buckets: G1 Add/AddAffine have 12/11 calls, G2 have 13/13, with no range-check failure calls. These are the intended isolated field/point helpers; exceptional-point branches belong to the variable-time public API.
+
+These tradeoffs do not establish a hardware winner for the combined tower/map/MSM policy. Retain compact on .NET 10 and expanded on .NET 11+, on ARM64 too, with explicit overrides and real-hardware CI benchmarks. No architecture-specific default or arithmetic rewrite is justified by emulated timings. Carry-chain improvements remain a JIT opportunity. See the [x64 before/after measurements](performance.md#arm64-portability-regression-capture).
+
+### x64 regression audit
+
+Both policies were re-audited on all three x64 hosts, tiering off/on. Production source is unchanged; the inventory now preserves repeated versions, so counts differ from the historical table.
+
+| Runtime / policy | Tiering off: versions / branches | Tiering on: versions / branches | Latency candidates off / on |
+|---|---:|---:|---:|
+| .NET 10 compact | 154 / 193 | 636 / 382 | 0 / 0 |
+| .NET 10 expanded | 173 / 198 | 668 / 393 | 0 / 0 |
+| .NET 11 compact | 151 / 185 | 627 / 376 | 0 / 0 |
+| .NET 11 expanded | 170 / 191 | 656 / 388 | 0 / 0 |
+| Patched compact | 151 / 186 | 748 / 780 | 0 / 12 |
+| Patched expanded | 170 / 191 | 777 / 791 | 0 / 12 |
+
+No new secret-dependent branch or address was found. The twelve patched tiered candidates remain public span-size and window-count divisions, as described above. All twelve full-suite host × policy × native-on/off combinations passed: 7,595,581 checks with native and 7,285,065 without, including the new 12/7 ABI/layout checks. Both framework builds remained warning-free.
+
+Real hardware execution/performance, macOS/Windows ARM64 runtime Tier1 review, and physical timing experiments remain open. Crossgen2 and QEMU do not establish processor timing behavior. Initial hosted CI results are also pending.
+
 ## Statistical timing experiment
 
 The opt-in benchmark uses shuffled balanced fixed/random classes, 2,000 warm-up operations, and a Welch t-test on raw timings plus timings with one class-independent upper 99th-percentile cutoff. Input preparation, field parsing, point rescaling and allocations are outside timing. Threshold is |t| > 4.5 in either view. Positive controls are mandatory: the command fails if a variable-time control fails to detect a difference.
@@ -80,4 +183,4 @@ $env:BLST_BENCH_PROCESSOR = '3'
 
 Repeat with compact kernels and each host/target. The full suite and benchmark commands are in [README](../README.md#build-and-test). Raw captures are not kept in the repository; the audit script and the benchmark runner's timing-leak mode regenerate them, and the tables retain the results.
 
-These observations apply to the recorded Windows x64 JITs and captured tiering settings. They do not cover debugger MinOpts, arbitrary stress settings, NativeAOT, ARM64, future JITs, power/EM leakage or memory disclosure. Repeat review after relevant source/runtime changes. Statistical non-detection is supporting evidence for these captures, not proof of absence of leakage.
+The timing experiment applies to the recorded Windows x64 JITs and captured tiering settings. It does not cover debugger MinOpts, arbitrary stress settings, NativeAOT, ARM64 physical timing, future JITs, power/EM leakage or memory disclosure. The separate ARM64 generated-code coverage is described above. Repeat review after relevant source/runtime changes. Statistical non-detection is supporting evidence for these captures, not proof of absence of leakage.

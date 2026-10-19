@@ -19,6 +19,12 @@ Fp parsing accepts exactly 48 canonical big-endian bytes and rejects values at o
 
 Check the curve before checking a subgroup. Scalar multiplication and MSM require subgroup points; pairing callers must validate curves and subgroups. Empty MSM returns infinity; empty/all-infinity pairings return one/true. Mismatched spans and invalid scalar lengths throw ArgumentException. Map APIs accept field elements and return subgroup points; they do not hash messages.
 
+## Portability
+
+Production code uses portable integer operations, `Math.BigMul`, spans and fixed-size value types without hardware intrinsics or native calls. Supported platform targets are little-endian x64/ARM64 on Linux, macOS and Windows. The test runner verifies field/tower/point sizes and coordinate offsets before running arithmetic. ARM64 stock JITs lower widening products to `mul`/`umulh`; stock carry materialization still uses compares and `cset`. Architecture alone is insufficient evidence for a policy override: retain compact on .NET 10 and expanded on .NET 11+, with both overrides available. See [code-generation evidence](constant-time-validation.md#arm64-validation).
+
+The optional native reference uses Cdecl imports. All field/point arguments cross the boundary through `in`/`out` references or explicit pointers, so no managed aggregate depends on ARM64 by-value struct rules. `ulong` maps to blst's `uint64_t` limb, `nuint` to `size_t`, and pointer tables retain native pointer width. The pinned C definitions export `int` predicates and an `int` conditional-negation flag, despite the public header spelling them `bool`; the imports match those definitions. No C `long` is imported. The loader uses the platform library extension and reports architecture mismatches instead of silently skipping a present binary. Windows ARM64 uses blst's MSVC assembly; Linux/macOS use upstream's shell build.
+
 ## Fields and extension tower
 
 Multiplication uses two-row CIOS with final conditional reduction. Negation expresses p-a as p+~a+1, exposing carry chains and preserving zero with a mask. Fp inversion uses variable-time binary GCD: 31-bit top/bottom approximations form signed 2×2 matrices, followed by exact six-limb updates and modular coefficient corrections. Zero inverts to zero. Tower inversions reduce through norms to Fp inversion; Fermat inversion is an independent test reference.

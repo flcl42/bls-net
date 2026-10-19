@@ -4,7 +4,7 @@ Efficient, pure C# BLS12-381 for .NET 10 and .NET 11, without native runtime dep
 
 This project is a C# rewrite of [Supranational's blst](https://github.com/supranational/blst), adapting its algorithms, formulas and constants for managed .NET. See [credits and license](#credits-and-license) for attribution and licensing.
 
-Development status: implemented and covered by reference, algebraic, alias/allocation and optional native differential tests. Release packaging and broader platform validation remain open. Original APIs are variable-time for public inputs. Explicit constant-time field inversion, scalar multiplication, point helpers and maps are available; see [contracts and limits](docs/design.md#constant-time-apis) and the [runtime audit](docs/constant-time-validation.md). Scalar multiplication and MSM require subgroup points; check the curve before checking the subgroup. Pairing callers must validate both. Complete secret-key support, BLS signatures, message hash-to-curve with DST, and compressed/uncompressed point encodings remain open. See [design](docs/design.md) and [roadmap](docs/roadmap.md).
+Development status: implemented and covered by reference, algebraic, alias/allocation and optional native differential tests. Release packaging and real ARM64 hardware validation remain open. Original APIs are variable-time for public inputs. Explicit constant-time field inversion, scalar multiplication, point helpers and maps are available; see [contracts and limits](docs/design.md#constant-time-apis) and the [runtime audit](docs/constant-time-validation.md). Scalar multiplication and MSM require subgroup points; check the curve before checking the subgroup. Pairing callers must validate both. Complete secret-key support, BLS signatures, message hash-to-curve with DST, and compressed/uncompressed point encodings remain open. See [design](docs/design.md) and [roadmap](docs/roadmap.md).
 
 ## Usage
 
@@ -54,7 +54,7 @@ dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release -p:BlsNetTe
 dotnet pack src/Nethermind.Crypto.BlsNet -c Release -o artifacts/packages
 ```
 
-Arithmetic, kernels, tower/pairing, curves/maps/MSM and constant-time functional checks run together and report check counts. `--constant-time-only` selects just the new functional checks. Native comparisons print `SKIP` when blst is absent; `--no-native` explicitly selects managed checks. Cold-call and policy diagnostics are available as `--kernel-cold-start`, `--square-cold-start` and `--kernel-policy` in separate processes.
+Arithmetic, kernels, tower/pairing, curves/maps/MSM and constant-time functional checks run together and report check counts. `--constant-time-only` selects just the new functional checks. Native comparisons print `SKIP` when blst is absent; `--no-native` explicitly selects managed checks, and `--require-native` fails if the reference is missing. Both runners print the OS, process architecture, runtime and selected policy. Cold-call and policy diagnostics are available as `--kernel-cold-start`, `--square-cold-start` and `--kernel-policy` in separate processes.
 
 To add the optional native reference on Windows x64:
 
@@ -64,7 +64,25 @@ git submodule update --init --depth 1 external/blst
 dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release
 ```
 
-The script downloads MinGW/w64devkit when needed and detects ADX/BMI2. The shared loader searches `artifacts/native/` in parent directories, then the legacy parent-directory DLL location. Native blst is only used by tests and benchmarks.
+The x64 script downloads MinGW/w64devkit when needed and detects ADX/BMI2. On Windows ARM64 it instead uses upstream's MSVC/ARM64 assembler build; install Visual Studio Build Tools with the MSVC ARM64 tools and a Windows SDK. `-Architecture arm64` also cross-builds from an x64 developer machine with those tools installed.
+
+On Linux or macOS, install a C compiler and the .NET 10 GA / .NET 11 preview SDKs, then use the same `dotnet build` and `dotnet run` commands above:
+
+```sh
+git submodule update --init --depth 1 external/blst
+sh scripts/build-native-blst.sh
+dotnet build Nethermind.Crypto.BlsNet.slnx -c Release --warnaserror
+dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release -- --compact-kernels --require-native
+dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release -- --expanded-kernels --require-native
+dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release -p:BlsNetTestTargetFramework=net10.0 -- --require-native
+dotnet run --project tests/Nethermind.Crypto.BlsNet.Tests -c Release -- --no-native
+```
+
+The shell script uses blst's `build.sh` for x64 or ARM64 and produces `artifacts/native/libblst.so` on Linux or `libblst.dylib` on macOS. It forwards upstream options such as `CC=clang`. Build and execute with the same architecture, including when using Rosetta. The shared loader probes each ancestor of the executable directory for `artifacts/native/<platform library>` and then `<platform library>`; a present incompatible binary fails with OS/architecture context. Native blst is only used by tests and benchmarks.
+
+Managed platform targets are Linux, macOS and Windows on little-endian x64 and ARM64. Windows x64 has full local validation; Linux ARM64 has emulated execution and runtime JIT review. Linux/macOS/Windows ARM64 also have stock .NET 10/11 crossgen2 code review; this does not substitute for runtime execution on each OS. See [audit coverage and limits](docs/constant-time-validation.md#arm64-validation).
+
+[CI](.github/workflows/ci.yml) configures Ubuntu x64/ARM64, Windows x64/ARM64 and macOS ARM64 runners. Every runner builds both frameworks with warnings as errors, runs native comparisons under both policies plus a managed-only run, and uploads informational `--quick` benchmarks for both frameworks/policies. Initial hosted results and real ARM64 performance remain to be collected. macOS x64 has a native build path but no hosted job in this matrix.
 
 ## Benchmarks
 
@@ -73,7 +91,7 @@ dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release -
 dotnet run --project benchmarks/Nethermind.Crypto.BlsNet.Benchmarks -c Release -- --filter 'Fp multiply|Fp2 multiply|Pairing check 2'
 ```
 
-One CLI covers fields, tower/pairing, curves/maps/MSM and the dependent Fr/Fp mul+add loops. `--filter` matches case-insensitive substrings separated by `|`; `--quick` shortens rounds and the default MSM sweep. Kernel policy switches and `--no-native` work here too. Set `BLST_BENCH_PROCESSOR` to pin a logical processor and disable tiering with `DOTNET_TieredCompilation=0` for measurements. Benchmarks also accept `-p:BlsNetTestTargetFramework=net10.0`.
+One CLI covers fields, tower/pairing, curves/maps/MSM and the dependent Fr/Fp mul+add loops. `--filter` matches case-insensitive substrings separated by `|`; `--quick` shortens rounds and the default MSM sweep. Kernel policy switches and `--no-native` work here too. On Windows, set `BLST_BENCH_PROCESSOR` to pin a logical processor and disable tiering with `DOTNET_TieredCompilation=0` for measurements. Benchmarks also accept `-p:BlsNetTestTargetFramework=net10.0`.
 
 `--filter 'CT '` measures constant-time / variable-time / blst side by side. The slow timing-leak experiment is opt-in with `--timing-leak --timing-samples 20000`; it includes variable-time multiplication as a required positive control. See [validation](docs/constant-time-validation.md) for its method and interpretation.
 
