@@ -36,6 +36,11 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     private static void MultiplyWideCompact(out FpWide result, in Fp a, in Fp b)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            MultiplyWideArm64(out result, a, b);
+            return;
+        }
         Unsafe.SkipInit(out FpWide r);
         ref ulong br = ref Unsafe.As<Fp, ulong>(ref Unsafe.AsRef(in b));
         ref ulong rr = ref r.L0;
@@ -77,6 +82,11 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     private static void MultiplyWideExpanded(out FpWide result, in Fp a, in Fp b)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            MultiplyWideArm64(out result, a, b);
+            return;
+        }
         Unsafe.SkipInit(out FpWide r);
         ref ulong br = ref Unsafe.As<Fp, ulong>(ref Unsafe.AsRef(in b));
         ref ulong rr = ref r.L0;

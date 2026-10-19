@@ -137,6 +137,7 @@ Local Windows-ABI ARM64 AltJit captures compare the original library/runtime wit
 | Fp multiply | 567 | 356 | 370 |
 | Fp square | 458 | 302 | 313 |
 | Fp raw product | 217 | 165 | 180 |
+| Fp raw product, preserving aliases | 223 | 166 | 180 |
 | Fp positive wide reduction | 341 | 200 | 204 |
 | Fp2 multiply | 1664 | 1159 | 1095 |
 | Fp2 square | 1178 | 810 | 801 |
@@ -165,7 +166,7 @@ All 171 common x64 library instruction listings match the original binary with t
 | G1 MSM 128, µs | 1513.200 | 1504.900 |
 | G2 MSM 128, µs | 2868.600 | 2864.700 |
 
-The full native-comparison suite passes **7,896,012 checks per run** under both policies on stock .NET 10.0.12, stock .NET 11 RC1 and the private patched .NET 12 host. The 23 JIT regressions also pass with the Release JIT and all ten Checked stress/tiering configurations. The two new fixtures compile successfully through the ARM64 Checked AltJit; their executed fallback checks are x64 checks.
+The initial candidate's full native-comparison suite passes **7,896,012 checks per run** under both policies on stock .NET 10.0.12, stock .NET 11 RC1 and the private patched .NET 12 host. The alias-preserving extension passes **7,936,156 checks** on the patched host, including both input halves overlapping the output. The 23 JIT regressions also pass with the Release JIT and all ten Checked stress/tiering configurations. The two new fixtures compile successfully through the ARM64 Checked AltJit; their executed fallback checks are x64 checks.
 
 ## EIP-2537 precompiles
 

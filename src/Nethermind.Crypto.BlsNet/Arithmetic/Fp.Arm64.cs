@@ -8,6 +8,28 @@ namespace Nethermind.Crypto.BlsNet.Arithmetic;
 
 public readonly partial struct Fp
 {
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void MultiplyWideArm64(out FpWide result, in Fp left, in Fp right)
+    {
+        ulong a0 = left._l0, a1 = left._l1, a2 = left._l2;
+        ulong a3 = left._l3, a4 = left._l4, a5 = left._l5;
+        ulong r0 = 0, r1 = 0, r2 = 0, r3 = 0, r4 = 0, r5 = 0, r6 = 0;
+        ulong r7 = 0, r8 = 0, r9 = 0, r10 = 0, r11 = 0;
+        AddProductRowArm64(right._l0, a0, a1, a2, a3, a4, a5, ref r0, ref r1, ref r2, ref r3, ref r4, ref r5, ref r6);
+        AddProductRowArm64(right._l1, a0, a1, a2, a3, a4, a5, ref r1, ref r2, ref r3, ref r4, ref r5, ref r6, ref r7);
+        AddProductRowArm64(right._l2, a0, a1, a2, a3, a4, a5, ref r2, ref r3, ref r4, ref r5, ref r6, ref r7, ref r8);
+        AddProductRowArm64(right._l3, a0, a1, a2, a3, a4, a5, ref r3, ref r4, ref r5, ref r6, ref r7, ref r8, ref r9);
+        AddProductRowArm64(right._l4, a0, a1, a2, a3, a4, a5, ref r4, ref r5, ref r6, ref r7, ref r8, ref r9, ref r10);
+        AddProductRowArm64(right._l5, a0, a1, a2, a3, a4, a5, ref r5, ref r6, ref r7, ref r8, ref r9, ref r10, ref r11);
+        // Keep every completed word in a scalar until both inputs are consumed.
+        // This also permits output overlap with either half of a wide input.
+        result = new FpWide
+        {
+            L0 = r0, L1 = r1, L2 = r2, L3 = r3, L4 = r4, L5 = r5,
+            L6 = r6, L7 = r7, L8 = r8, L9 = r9, L10 = r10, L11 = r11,
+        };
+    }
+
     // Only the disjoint-output entry point stores completed low limbs before
     // reading the next right-hand limb. Ordinary wide products preserve aliases.
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]

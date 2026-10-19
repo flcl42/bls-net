@@ -157,6 +157,20 @@ internal static unsafe partial class TowerTests
         Fp.MultiplyArm64(out armAlias, a, armAlias);
         Check(Fp.AreEqual(armAlias, armProduct), "ARM64 row product right alias");
         Fp.MultiplyWide(out FpWide wide, a, b); Check(Signed(wide) == x * y, "wide product vs BigInteger");
+        Fp.MultiplyWideArm64(out FpWide armWide, a, b);
+        Check(Signed(armWide) == x * y, "ARM64 wide product vs BigInteger");
+        FpWide armProductAlias = default;
+        Unsafe.As<FpWide, Fp>(ref armProductAlias) = a;
+        Fp.MultiplyWideArm64(out armProductAlias, Unsafe.As<FpWide, Fp>(ref armProductAlias), b);
+        Check(Signed(armProductAlias) == x * y, "ARM64 wide product left overlap");
+        Unsafe.As<FpWide, Fp>(ref armProductAlias) = b;
+        Fp.MultiplyWideArm64(out armProductAlias, a, Unsafe.As<FpWide, Fp>(ref armProductAlias));
+        Check(Signed(armProductAlias) == x * y, "ARM64 wide product right overlap");
+        Unsafe.As<FpWide, Fp>(ref armProductAlias) = a;
+        ref Fp highAlias = ref Unsafe.As<ulong, Fp>(ref armProductAlias.L6);
+        highAlias = b;
+        Fp.MultiplyWideArm64(out armProductAlias, Unsafe.As<FpWide, Fp>(ref armProductAlias), highAlias);
+        Check(Signed(armProductAlias) == x * y, "ARM64 wide product both input overlaps");
         Fp.ReduceWideCoreArm64(out Fp armWideReduced, wide);
         Check(Raw(armWideReduced) < 2 * P && Mod(Raw(armWideReduced)) == Mod(x * y * RInverse),
             "ARM64 wide reduction vs BigInteger");
