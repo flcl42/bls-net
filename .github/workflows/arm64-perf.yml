@@ -1,0 +1,111 @@
+name: ARM64 performance
+on:
+  push:
+    branches: [arm64-perf, 'arm64-perf-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.config.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: config
+        shell: bash
+        run: |
+          source perf/runtime.env
+          if [[ "$RUN_MACOS" == true ]]; then
+            echo 'matrix={"os":["ubuntu-24.04-arm","macos-15"]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"os":["ubuntu-24.04-arm"]}' >> "$GITHUB_OUTPUT"
+          fi
+  measure:
+    needs: config
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.config.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    env:
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_TieredCompilation: '0'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '11.0.x'
+          dotnet-quality: preview
+      - name: Read configuration
+        run: |
+          source perf/runtime.env
+          echo "RUNTIME_REPO=$RUNTIME_REPO" >> "$GITHUB_ENV"
+          echo "RUNTIME_REF=$RUNTIME_REF" >> "$GITHUB_ENV"
+          echo "STOCK_DOTNET=$(command -v dotnet)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.RUNTIME_REPO }}
+          ref: ${{ env.RUNTIME_REF }}
+          path: .perf-runtime
+          fetch-depth: 1
+      - name: Install runtime build dependencies
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo .perf-runtime/eng/common/native/install-dependencies.sh linux
+          else
+            .perf-runtime/eng/common/native/install-dependencies.sh osx
+          fi
+      - name: Apply patches and compute non-JIT cache identity
+        id: identity
+        run: python3 perf/prepare.py
+      - uses: actions/cache/restore@v4
+        id: runtime-cache
+        with:
+          path: |
+            .perf-cache
+            .perf-runtime/.dotnet
+          key: arm64-testhost-v1-${{ runner.os }}-${{ steps.identity.outputs.key }}
+      - name: Build runtime and both JITs
+        run: bash perf/build-runtime.sh '${{ steps.runtime-cache.outputs.cache-hit }}'
+      # Save before tests: a codegen failure must not throw away a reusable testhost.
+      - uses: actions/cache/save@v4
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            .perf-cache
+            .perf-runtime/.dotnet
+          key: arm64-testhost-v1-${{ runner.os }}-${{ steps.identity.outputs.key }}
+      - name: Build managed binaries and native blst
+        run: |
+          sh scripts/build-native-blst.sh
+          "$STOCK_DOTNET" build Nethermind.Crypto.BlsNet.slnx -c Release -p:BlsNetTestTargetFramework=net11.0 --warnaserror
+          python3 perf/create-runner.py
+          "$STOCK_DOTNET" build artifacts/perf/jit-runner/Runner.csproj -c Release --warnaserror
+      - name: Verify testhost and run functional and JIT tests
+        run: python3 perf/measure.py test
+      - name: Alternate patched and stock benchmarks and capture disassembly
+        run: python3 perf/measure.py bench
+      - name: Publish median table
+        run: python3 perf/report.py artifacts/perf
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm64-perf-${{ matrix.os }}
+          path: |
+            artifacts/perf
+            .perf-runtime/artifacts/log
+          retention-days: 30
+          if-no-files-found: warn

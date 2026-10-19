@@ -6,3 +6,5 @@
 .idea/
 *.user
 __pycache__/
+/.perf-runtime/
+/.perf-cache/
