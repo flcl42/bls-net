@@ -104,6 +104,69 @@ Captured 2026-10-19 by CI on GitHub-hosted `ubuntu-24.04-arm` and `macos-15` (Ap
 
 Expanded beats compact on ARM64 even on .NET 10, unlike x64, so ARM64 defaults to expanded on every runtime. Stock ARM64 JITs still materialize carries with `cmp`/`cset` (see [code-generation findings](constant-time-validation.md#hot-kernel-findings-and-policy)), which leaves managed code about 1.3–3x slower than blst's ARM64 assembly. That is the same kind of gap the carry-aware JIT closes on x64. CI uploads the full output of every run as artifacts.
 
+### Carry-aware runtime baseline
+
+[Run 39304746175](https://github.com/flcl42/bls-net/actions/runs/39304746175) measured runtime `74ed6106` on real Linux ARM64 with three alternating repetitions per host/policy, one pinned core, tiering and ReadyToRun disabled, and native blst in every process. Expanded-policy medians below are in **µs**. The library was `48bf683b`; these are the baseline before the ARM64 changes in [arm64.patch](../jit/arm64.patch).
+
+| Operation | Stock .NET 11 | Patched before | blst |
+|---|---:|---:|---:|
+| Fp multiply | 0.080 | 0.050 | 0.039 |
+| Fp square | 0.076 | 0.042 | 0.034 |
+| Fp2 multiply | 0.250 | 0.153 | 0.113 |
+| Fp2 square | 0.178 | 0.109 | 0.085 |
+| Fr mul+add | 0.047 | 0.029 | 0.024 |
+| Fp mul+add | 0.096 | 0.059 | 0.045 |
+| CT Fp inverse | 5.480 | 4.832 | 2.859 |
+| Fp inverse, same inputs | 3.528 | 3.064 | 2.859 |
+| Pairing check 2 | 1911.954 | 1167.972 | 853.434 |
+| G1 multiply | 162.148 | 100.259 | 89.115 |
+| G2 multiply | 284.584 | 174.549 | 182.941 |
+| G1 MSM 128 | 6265.223 | 4034.174 | 3410.067 |
+| G2 MSM 128 | 11615.947 | 7326.774 | 9169.268 |
+| map G1 | 98.043 | 58.226 | 44.777 |
+| map G2 | 355.490 | 211.078 | 160.484 |
+
+The cold runtime/testhost plus both JITs took 998 seconds. All library suites and all twenty Release/Checked stress/tiering configurations passed. Native timings remain specific to each capture; the table uses the patched process's native medians. Candidate hardware measurements follow after pipeline validation.
+
+### ARM64 generated code
+
+Local Windows-ABI ARM64 AltJit captures compare the original library/runtime with the ARM64 kernels and runtime `8a918efe`. Counts include fixed loop repetitions, managed/native wrappers and symbolically resolved arithmetic callees. blst counts use its generated ELF ARMv8 assembly, including bare returns; ABI and scheduling differences remain. The dedicated inverse row counts one loop step, not a complete batch or inversion.
+
+| Kernel | Original managed, runtime 74ed6106 | ARM64 candidate | blst ARM64 |
+|---|---:|---:|---:|
+| Fp multiply | 567 | 356 | 370 |
+| Fp square | 458 | 302 | 313 |
+| Fp raw product | 217 | 165 | 180 |
+| Fp positive wide reduction | 341 | 200 | 204 |
+| Fp2 multiply | 1664 | 1159 | 1095 |
+| Fp2 square | 1178 | 810 | 801 |
+| Fp add | 90 | 43 | 45 |
+| Fp subtract | 93 | 56 | 44 |
+| Inverse inner step | 34 | 18 | 27 |
+
+Fp multiply's isolated arithmetic leaf is 347 branch-free instructions; its managed entry adds nine. The raw product and wide reducer are also branch-free. The inverse uses three CSELs and only its public backedge per step. Managed retains 31-bit batches; blst ARM64 uses 62-bit batches. [JIT reproduction](../jit/README.md#arm64-carry-and-row-follow-up) describes the private-host CoreLib preparation needed for accurate widening-product imports.
+
+The ARM64 audit inventory covers 163 reachable methods and reports no variable-latency candidates. It retains unresolved helpers requiring native ARM64 closure. Reviewed field-kernel branches are absent; inversion branches count fixed batches/steps or clear a public stack-frame range. The capture is generated-code review, not hardware execution.
+
+### x64 regression check for the ARM64 candidate
+
+All 171 common x64 library instruction listings match the original binary with the baseline JIT. Three alternating baseline/candidate expanded-policy `--quick` captures use private patched hosts, Major roll-forward, ReadyToRun/tiering disabled and processor 3. Medians below complement that exact instruction comparison; changes under 0.6% are within the harness's shared-VM noise.
+
+| Operation | Before | After |
+|---|---:|---:|
+| Fp multiply, ns | 18.620 | 18.560 |
+| Fp square, ns | 16.960 | 16.910 |
+| Fp2 multiply, ns | 59.110 | 59.160 |
+| Fp2 square, ns | 40.360 | 40.180 |
+| Fr mul+add, ns | 10.850 | 10.790 |
+| Fp mul+add, ns | 19.640 | 19.640 |
+| CT Fp inverse, µs | 1.663 | 1.660 |
+| Pairing check 2, µs | 423.860 | 424.320 |
+| G1 MSM 128, µs | 1513.200 | 1504.900 |
+| G2 MSM 128, µs | 2868.600 | 2864.700 |
+
+The full native-comparison suite passes **7,896,012 checks per run** under both policies on stock .NET 10.0.12, stock .NET 11 RC1 and the private patched .NET 12 host. The 23 JIT regressions also pass with the Release JIT and all ten Checked stress/tiering configurations. The two new fixtures compile successfully through the ARM64 Checked AltJit; their executed fallback checks are x64 checks.
+
 ## EIP-2537 precompiles
 
 Nethermind's BenchmarkDotNet in-process Short job measures complete precompiles. Native is Nethermind.Crypto.Bls 0.3.17.15; managed uses the same parsing, validation and output encoding over net10.0 sources. Stock is .NET 10.0.12; the carry-aware host identifies itself as .NET 12.0.0-dev.

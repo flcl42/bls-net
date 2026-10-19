@@ -76,6 +76,12 @@ internal static unsafe partial class TowerTests
             foreach (BigInteger z in rawEdges) foreach (BigInteger w in rawEdges)
                 TestFp2(new Fp2(a, b), new Fp2(RawField(z), RawField(w)));
         }
+        BigInteger[] armEdges = [0, 1, P - 1, P, P + 1, 2 * P - 1];
+        foreach (BigInteger x in armEdges) foreach (BigInteger y in armEdges)
+        {
+            Fp.MultiplyArm64(out Fp product, RawField(x), RawField(y));
+            CheckReduced(product, x * y * RInverse, "ARM64 unreduced product boundary");
+        }
         for (int i = 0; i < 10000; i++)
         {
             Fp a = Field(), b = Field();
@@ -86,10 +92,14 @@ internal static unsafe partial class TowerTests
             Check(Signed(wideTwice) == Raw(a) * Raw(b) * 4, "wide unreduced product vs BigInteger");
             Fp.MultiplyWideNoAlias(out FpWide directTwice, twiceA, twiceB);
             Check(Signed(directTwice) == Raw(a) * Raw(b) * 4, "disjoint unreduced product bound");
+            Fp.MultiplyWideNoAliasArm64(out directTwice, twiceA, twiceB);
+            Check(Signed(directTwice) == Raw(a) * Raw(b) * 4, "ARM64 disjoint unreduced product bound");
             Fp.ReduceWide(out Fp wideReduced, wideTwice);
             CheckReduced(wideReduced, Raw(a) * Raw(b) * 4 * RInverse, "wide unreduced product reduction");
             Fp.MultiplyComposite(out Fp product, twiceA, twiceB);
             CheckReduced(product, Raw(a) * Raw(b) * 4 * RInverse, "unreduced product bound");
+            Fp.MultiplyArm64(out product, twiceA, twiceB);
+            CheckReduced(product, Raw(a) * Raw(b) * 4 * RInverse, "ARM64 unreduced product bound");
             Fp c = Field(); Fp.SubtractSumComposite(out Fp difference, a, b, c);
             CheckReduced(difference, Raw(a) - Raw(b) - Raw(c), "fused subtraction vs BigInteger");
             Fp differenceAlias = a; Fp.SubtractSumComposite(out differenceAlias, differenceAlias, b, c);
@@ -138,8 +148,24 @@ internal static unsafe partial class TowerTests
     }
     private static void TestKernelPair(in Fp a, in Fp b, BigInteger x, BigInteger y)
     {
+        Fp.MultiplyArm64(out Fp armProduct, a, b);
+        CheckReduced(armProduct, x * y * RInverse, "ARM64 row product vs BigInteger");
+        Fp armAlias = a;
+        Fp.MultiplyArm64(out armAlias, armAlias, b);
+        Check(Fp.AreEqual(armAlias, armProduct), "ARM64 row product left alias");
+        armAlias = b;
+        Fp.MultiplyArm64(out armAlias, a, armAlias);
+        Check(Fp.AreEqual(armAlias, armProduct), "ARM64 row product right alias");
         Fp.MultiplyWide(out FpWide wide, a, b); Check(Signed(wide) == x * y, "wide product vs BigInteger");
+        Fp.ReduceWideCoreArm64(out Fp armWideReduced, wide);
+        Check(Raw(armWideReduced) < 2 * P && Mod(Raw(armWideReduced)) == Mod(x * y * RInverse),
+            "ARM64 wide reduction vs BigInteger");
+        FpWide armWideAlias = wide;
+        Fp.ReduceWideCoreArm64(out Unsafe.As<FpWide, Fp>(ref armWideAlias), armWideAlias);
+        Check(Fp.AreEqual(Unsafe.As<FpWide, Fp>(ref armWideAlias), armWideReduced), "ARM64 wide reduction alias");
         Fp.MultiplyWideNoAlias(out FpWide direct, a, b);
+        Fp.MultiplyWideNoAliasArm64(out FpWide directArm64, a, b);
+        Check(Signed(directArm64) == x * y, "ARM64 disjoint wide product vs BigInteger");
         Check(Signed(direct) == x * y, "disjoint wide product vs BigInteger");
         Check(Raw(a) == x && Raw(b) == y, "disjoint wide product inputs intact");
         FpWide overlap = default;

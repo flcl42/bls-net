@@ -54,7 +54,9 @@ Use net10.0 for stock .NET 10. The script sets/restores root, roll-forward, Read
 
 ## ARM64 validation
 
-Extended 2026-10-19 with stock .NET 10.0.12 and .NET 11.0.0-rc.1.26425.128. Production arithmetic and the runtime-based kernel default are unchanged. This is a manual control-flow/address review, not an independent security audit or a claim about physical ARM CPU latency.
+The initial portability captures below use stock .NET 10.0.12 and .NET 11.0.0-rc.1.26425.128 and precede the ARM64 arithmetic kernels. The [ARM64 follow-up](../jit/README.md#arm64-carry-and-row-follow-up) adds separate private-host AltJit captures with the patched runtime and current kernels. This is a manual control-flow/address review, not an independent security audit or a claim about physical ARM CPU latency.
+
+The current patched AltJit inventory covers 163 reachable methods, with no variable-latency candidates. The unrolled Fp multiply/square, disjoint raw product and positive wide reducer have no conditional branches. The 31-step inverse kernel uses three CSELs and its public backedge; the Fp inverse wrapper's nine branches count public batches/steps or clear its fixed stack-frame range. Addressed stack fields and loads/stores preserve NZCV without reordering accesses. Remaining unresolved helpers require capture on native ARM64; the x64 fallback can execute different helper boundaries. Run `scripts/audit-constant-time.ps1 -Arm64AltJit clrjit_universal_arm64_x64.dll -Dotnet <private-host>` for this local inventory, and omit `-Arm64AltJit` on the native ARM64 host.
 
 ### Cross-compilation
 

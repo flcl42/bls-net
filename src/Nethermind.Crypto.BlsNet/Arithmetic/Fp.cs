@@ -239,6 +239,11 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static void Multiply(out Fp result, in Fp left, in Fp right)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            MultiplyArm64(out result, left, right);
+            return;
+        }
         ulong a0 = left._l0;
         ulong a1 = left._l1;
         ulong a2 = left._l2;
@@ -659,6 +664,11 @@ public readonly partial struct Fp : IEquatable<Fp>, IField<Fp>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void Reduce(out Fp result, ulong t0, ulong t1, ulong t2, ulong t3, ulong t4, ulong t5)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            ReduceArm64(out result, t0, t1, t2, t3, t4, t5);
+            return;
+        }
         // Adding 2^384 - p carries out of the top limb exactly when t >= p.
         ulong s0 = t0 + NegM0;
         ulong carry = s0 < t0 ? 1UL : 0UL;

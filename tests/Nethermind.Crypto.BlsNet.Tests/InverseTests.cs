@@ -138,6 +138,8 @@ internal static class InverseTests
             }
             Matrix(aa, bb, 31, out BigInteger f0, out BigInteger g0, out BigInteger f1, out BigInteger g1);
             InverseBatch.Steps31(aa, bb, out long pf0, out long pg0, out long pf1, out long pg1);
+            InverseBatch.Steps31Arm64(aa, bb, out long af0, out long ag0, out long af1, out long ag1);
+            Check(af0 == pf0 && ag0 == pg0 && af1 == pf1 && ag1 == pg1, "ARM64 packed batch vs original");
             Check(f0 == pf0 && g0 == pg0 && f1 == pf1 && g1 == pg1, "packed matrix");
             Check(BigInteger.Abs(f0) + BigInteger.Abs(g0) <= BigInteger.One << 31 && BigInteger.Abs(f1) + BigInteger.Abs(g1) <= BigInteger.One << 31, "row bounds");
             Check(BigInteger.Abs(f0 * g1 - f1 * g0) == BigInteger.One << 31, "determinant");

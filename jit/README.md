@@ -32,3 +32,27 @@ cmd /c "cd /d R:\ && R:\src\coreclr\build-runtime.cmd -x64 -release -component j
 Copy each experimental JIT into a private testhost's `shared/Microsoft.NETCore.App/<version>/clrjit.dll`. Run all tests in every matrix configuration, clearing stress settings between runs. Run builds, tests and timings sequentially. Install the final Release JIT into the shared testhost only after validation.
 
 The measured Release `clrjit.dll` has SHA-256 `6DE7EEC60C3D117ACC7DB637F5B7D14161E5E488598CA1C2CF7810E82FA70637`. The fixed binary-GCD inverse measurements require the combined patch. The retained EIP-2537 precompile capture requires only the original PR.
+
+## ARM64 carry and row follow-up
+
+Apply [`arm64.patch`](arm64.patch) to **74ed610683646896bfd9f22bbbcea93124b44f4a**, which already contains both x64 follow-ups above. The runtime branch is `flcl42/runtime:arm64-carry`, currently **8a918efed98f5744e387e79223363898a43ea883**. It adds:
+
+* ARM64 mask selects and shared XOR swaps using CSEL, including integer comparison masks. Existing all-use, source-definition, flag-clobber, escaping-local and EH checks remain in force.
+* NZCV forwarding across integer loads/stores, stack fields and addresses, constants, complements, ordinary non-S arithmetic, shifts and widening products. Calls, volatile/GC stores and unknown intrinsic expansions remain excluded. Memory accesses retain their order.
+* Straight-line unsigned multiply rows with a high-word-plus-C carry representation. Intermediate lanes use ADCS/ADC/ADDS; the row ends with one drain. Both halves must describe the same reaching operand values, changed intermediates must have one reader, and moving a carry read in either direction must cross no redefinition. Analysis has bounded rescans and excludes EH.
+* An ARM64-only 1,048,576-visit allowance for extended single-use carry scans. Fully unrolled Montgomery kernels otherwise exhaust the former 65,536 allowance before their last chains. x64 retains its original allowance and lowering behavior.
+
+`Arm64FlagPreservation` checks multiply rows, loads/stores, stack fields, complements, volatile accesses, aliases and comparison masks against independent references. `Arm64UnrolledCarry` checks twelve vector carry chains and their widening products against BigInteger. Both are in `src/tests/JIT/opt/Add` and the local standalone runner. The complete **23-test x64 Checked matrix passed** with tiering 0/1 crossed with default, `JitStress=2` and `JitStressRegs=1/3/8`. All **171 common x64 library method instruction listings are identical** to the 74ed6106 baseline, including the ARM-specific library dispatches.
+
+Build cross JITs sequentially with `build-runtime.cmd -x64 -release -component alljits -ninja`, then repeat with `-checked`. This runtime version produces `clrjit_universal_arm64_x64.dll`; target OS/ABI comes from the host. The recorded private host and JIT use JIT-EE GUID `539ba29b-25d8-4b34-895a-01f513a3683a`.
+
+The x64 CoreLib was linked with the ARM branch removed from `Math.BigMul`. [`prepare-altjit-host.ps1`](../scripts/prepare-altjit-host.ps1) restores that unreachable fallback in a separate private copy, retaining the original x64 branch. Its strict IL/header checks support only the recorded testhost. Production assemblies are untouched. Copy the Checked x64 fallback JIT and ARM64 AltJit into that private host, then capture:
+
+```powershell
+./scripts/prepare-altjit-host.ps1 -SourceHost '<x64-testhost>' -OutputHost artifacts/arm64-altjit
+# Copy the matching Checked clrjit.dll and clrjit_universal_arm64_x64.dll into its shared framework.
+./scripts/audit-constant-time.ps1 -Dotnet "$PWD/artifacts/arm64-altjit/dotnet.exe" `
+  -Arm64AltJit clrjit_universal_arm64_x64.dll -OutputDirectory artifacts/arm64-audit
+```
+
+This executes x64 fallback code and inventories Windows-ABI ARM64 listings. For standalone regression codegen, set `DOTNET_AltJit='Arm64FlagPreservation:* Arm64UnrolledCarry:*'`. Hardware tests and timings must use the native ARM64 runtime. [Performance](../docs/performance.md#arm64-hardware) records the baseline and generated-code comparison.

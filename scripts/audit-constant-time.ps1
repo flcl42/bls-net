@@ -3,6 +3,7 @@ param(
     [ValidateSet('net10.0','net11.0')][string]$TargetFramework = 'net11.0',
     [ValidateSet('compact','expanded')][string]$KernelPolicy = 'expanded',
     [switch]$Tiered,
+    [string]$Arm64AltJit,
     [string]$Crossgen2,
     [string]$RuntimeDirectory,
     [ValidateSet('linux','osx','windows')][string]$TargetOS = 'linux',
@@ -70,9 +71,19 @@ if (!$Dotnet) { throw 'Specify -Dotnet for runtime captures, or -Crossgen2 and -
 $saved = @{}
 $settings = @{
     DOTNET_TieredCompilation = $(if ($Tiered) { '1' } else { '0' }); DOTNET_ReadyToRun = '0'
-    DOTNET_JitDisasm = '*'; DOTNET_JitDisasmAssemblies = 'Nethermind.Crypto.BlsNet'
+    DOTNET_JitDisasm = '*'; DOTNET_JitDisasmAssemblies = 'Nethermind.Crypto.BlsNet;Nethermind.Crypto.BlsNet.Tests'
     DOTNET_JitStdOutFile = (Join-Path $output 'disassembly.txt')
     DOTNET_ROOT = (Split-Path $Dotnet); DOTNET_ROLL_FORWARD = 'Major'
+}
+if ($Arm64AltJit) {
+    if ($Tiered) { throw 'Use an untiered private host for cross-architecture AltJit captures.' }
+    $settings.DOTNET_AltJit = '*'
+    $settings.DOTNET_AltJitName = $Arm64AltJit
+    $settings.DOTNET_EnableArm64Sve = '0'
+    $settings.DOTNET_EnableArm64Sve2 = '0'
+    $settings.DOTNET_EnableArm64Cssc = '0'
+    "ARM64 AltJit on an x64 private host; compiler: $Arm64AltJit; executed code is the x64 fallback. Windows ABI; validate Linux hardware separately." |
+        Set-Content (Join-Path $output 'scope.txt')
 }
 foreach ($key in $settings.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key); [Environment]::SetEnvironmentVariable($key, $settings[$key]) }
 try {

@@ -7,7 +7,9 @@ namespace Nethermind.Crypto.BlsNet.Arithmetic;
 internal static class InverseBatch
 {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static ulong ZeroMask(ulong x) => ((x | (0UL - x)) >> 63) - 1;
+    internal static ulong ZeroMask(ulong x) => System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported
+        ? 0UL - (x == 0 ? 1UL : 0UL)
+        : ((x | (0UL - x)) >> 63) - 1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static ulong Select(ulong set, ulong clear, ulong mask) => clear ^ ((set ^ clear) & mask);
@@ -17,6 +19,11 @@ internal static class InverseBatch
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Steps31(ulong a, ulong b, out long f0, out long g0, out long f1, out long g1)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            Steps31Arm64(a, b, out f0, out g0, out f1, out g1);
+            return;
+        }
         const ulong bias = 0x7fffffff7fffffff;
         ulong row0 = 0x7fffffff80000000, row1 = 0x800000007fffffff;
         for (int i = 0; i < 31; i++)
@@ -32,6 +39,37 @@ internal static class InverseBatch
             ulong final0 = Select(nextRow, old0, odd);
             ulong final1 = Select(next1, old1, odd);
             a = finalA >> 1; b = finalB; row0 = final0; row1 = 2 * final1 - bias;
+        }
+        f0 = (long)(uint)row0 - 0x7fffffff;
+        g0 = (long)(row0 >> 32) - 0x7fffffff;
+        f1 = (long)(uint)row1 - 0x7fffffff;
+        g1 = (long)(row1 >> 32) - 0x7fffffff;
+    }
+
+    // Gate the subtraction by parity before deciding to swap. An even a
+    // cannot borrow, so its state and coefficient row need no rollback selects.
+    // This retains the existing 31-bit schedule and packed-coefficient bounds.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void Steps31Arm64(ulong a, ulong b, out long f0, out long g0, out long f1, out long g1)
+    {
+        const ulong bias = 0x7fffffff7fffffff;
+        ulong row0 = 0x7fffffff80000000, row1 = 0x800000007fffffff;
+        for (int i = 0; i < 31; i++)
+        {
+            ulong odd = 0UL - (a & 1);
+            ulong difference = a - (b & odd);
+            ulong swap = 0UL - (difference > a ? 1UL : 0UL);
+            ulong nextA = Select(b - a, difference, swap);
+            ulong nextB = Select(a, b, swap);
+            // Recover the other swapped row from their invariant sum. This
+            // leaves three ordinary selects sharing the borrow flags instead
+            // of mixing a CSE-shared XOR swap with two ordinary selects.
+            ulong sum = row0 + row1;
+            ulong next0 = Select(row1, row0, swap), next1 = sum - next0;
+            row0 = next0 - (next1 & odd) + (bias & odd);
+            row1 = 2 * next1 - bias;
+            a = nextA >> 1;
+            b = nextB;
         }
         f0 = (long)(uint)row0 - 0x7fffffff;
         g0 = (long)(row0 >> 32) - 0x7fffffff;

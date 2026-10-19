@@ -169,6 +169,11 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     private static void MultiplyWideNoAliasExpanded(out FpWide result, in Fp a, in Fp b)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            MultiplyWideNoAliasArm64(out result, a, b);
+            return;
+        }
         Unsafe.SkipInit(out result);
         ref ulong br = ref Unsafe.As<Fp, ulong>(ref Unsafe.AsRef(in b));
         ref ulong rr = ref result.L0;
@@ -250,6 +255,11 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ReduceWideCore(out Fp result, in FpWide value)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            ReduceWideCoreArm64(out result, value);
+            return;
+        }
         ulong t0 = value.L0;
         ulong t1 = value.L1;
         ulong t2 = value.L2;
