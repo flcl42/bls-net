@@ -464,6 +464,11 @@ public readonly partial struct Fp
     // Karatsuba components, keeping t1 intact. The ref buffers are modified in place.
     internal static void SubtractWideProducts(ref FpWide t0, in FpWide t1, ref FpWide t2)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            SubtractWideProductsArm64(ref t0, t1, ref t2);
+            return;
+        }
         SubtractWideInline(out t2, t2, t0);
         SubtractWideInline(out t2, t2, t1);
         SubtractWideInline(out t0, t0, t1);

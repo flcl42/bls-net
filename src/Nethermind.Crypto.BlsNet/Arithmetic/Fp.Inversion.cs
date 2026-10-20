@@ -52,6 +52,7 @@ public readonly partial struct Fp
                 aa >>= 1;
                 f1 <<= 1; g1 <<= 1;
             }
+            Fp nextU;
             if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported && steps == 31)
             {
                 // The fixed-width update already implements this exact signed
@@ -61,14 +62,16 @@ public readonly partial struct Fp
                 ref Fp bv = ref Unsafe.As<ulong, Fp>(ref MemoryMarshal.GetReference(b));
                 InverseUpdate(out Unsafe.As<ulong, Fp>(ref MemoryMarshal.GetReference(nextA)), av, bv, ref f0, ref g0);
                 InverseUpdate(out Unsafe.As<ulong, Fp>(ref MemoryMarshal.GetReference(nextB)), av, bv, ref f1, ref g1);
+                ApplyCoefficientMatrix31Arm64(out nextU, u, v, f0, g0);
+                ApplyCoefficientMatrix31Arm64(out v, u, v, f1, g1);
             }
             else
             {
                 ApplyGcdMatrix(nextA, a, b, ref f0, ref g0, steps);
                 ApplyGcdMatrix(nextB, a, b, ref f1, ref g1, steps);
+                ApplyCoefficientMatrix(out nextU, u, v, f0, g0, steps);
+                ApplyCoefficientMatrix(out v, u, v, f1, g1, steps);
             }
-            ApplyCoefficientMatrix(out Fp nextU, u, v, f0, g0, steps);
-            ApplyCoefficientMatrix(out v, u, v, f1, g1, steps);
             u = nextU;
             nextA.CopyTo(a); nextB.CopyTo(b);
         }
@@ -143,5 +146,39 @@ public readonly partial struct Fp
         high += (ulong)(carry >> 63);
         high += MulAdd((ulong)g, b, low, 0, out low) - (b & (ulong)(g >> 63));
         return (long)high;
+    }
+
+    // Regular inversion only: full 31-step rows have |f|+|g| <= 2^31.
+    // Add q*p to make the signed numerator divisible by 2^31, then perform
+    // the same (-p,2p) correction as ApplyCoefficientMatrix. Keep the six
+    // words in scalar locals and give shifts their constant 31-bit count.
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void ApplyCoefficientMatrix31Arm64(out Fp result, in Fp u, in Fp v, long f, long g)
+    {
+        ref ulong m = ref MemoryMarshal.GetArrayDataReference(ModulusLimbs);
+        ulong q = ((ulong)f * u._l0 + (ulong)g * v._l0) * N0 & 0x7fffffffUL;
+        long carry = SignedProductSum(out ulong w0, f, u._l0, g, v._l0, 0);
+        carry += (long)MulAdd(q, m, w0, 0, out w0);
+        carry = SignedProductSum(out ulong w1, f, u._l1, g, v._l1, carry);
+        carry += (long)MulAdd(q, Unsafe.Add(ref m, 1), w1, 0, out w1);
+        carry = SignedProductSum(out ulong w2, f, u._l2, g, v._l2, carry);
+        carry += (long)MulAdd(q, Unsafe.Add(ref m, 2), w2, 0, out w2);
+        carry = SignedProductSum(out ulong w3, f, u._l3, g, v._l3, carry);
+        carry += (long)MulAdd(q, Unsafe.Add(ref m, 3), w3, 0, out w3);
+        carry = SignedProductSum(out ulong w4, f, u._l4, g, v._l4, carry);
+        carry += (long)MulAdd(q, Unsafe.Add(ref m, 4), w4, 0, out w4);
+        carry = SignedProductSum(out ulong w5, f, u._l5, g, v._l5, carry);
+        carry += (long)MulAdd(q, Unsafe.Add(ref m, 5), w5, 0, out w5);
+        ulong r0 = (w0 >> 31) | (w1 << 33), r1 = (w1 >> 31) | (w2 << 33);
+        ulong r2 = (w2 >> 31) | (w3 << 33), r3 = (w3 >> 31) | (w4 << 33);
+        ulong r4 = (w4 >> 31) | (w5 << 33), r5 = (w5 >> 31) | ((ulong)carry << 33);
+        if (carry < 0)
+        {
+            ulong c = 0;
+            r0 = AddCarry(r0, m, ref c); r1 = AddCarry(r1, Unsafe.Add(ref m, 1), ref c);
+            r2 = AddCarry(r2, Unsafe.Add(ref m, 2), ref c); r3 = AddCarry(r3, Unsafe.Add(ref m, 3), ref c);
+            r4 = AddCarry(r4, Unsafe.Add(ref m, 4), ref c); r5 = AddCarry(r5, Unsafe.Add(ref m, 5), ref c);
+        }
+        ReduceArm64(out result, r0, r1, r2, r3, r4, r5);
     }
 }

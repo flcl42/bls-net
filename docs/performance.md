@@ -182,14 +182,43 @@ The next candidate reuses the existing signed 31-step update helper in the varia
 
 At this checkpoint, stock .NET 10/11 and patched x64 pass 8,137,792 checks under each policy. Fresh x64 captures with runtime `c318f5ac` match all 171 common audit methods and all 147 common regular benchmark/library methods against the original library/runtime; relocation addresses and process stack cookies are normalized, arithmetic constants are retained. The regular capture includes variable inversion, full wide reduction and Fp12 multiply/square. Three alternating x64 quick captures show Fp12 multiply/square and pairing medians within 1.1%; individual kernel-loop samples fluctuate substantially, including an Fp2-square median 12% higher despite identical library instructions. These noisy harness samples do not establish a timing regression or a speed claim. The exact instruction comparisons provide the x64 preservation evidence. `RUN_MACOS=true` is set for native Apple silicon validation, and Fp12 square/raw-product/reduction names are appended to the repeated filter. The native-wrapper workflow build hook awaits authorization under the pipeline ownership rule.
 
+### Fused Fp2 checkpoint on Linux and Apple silicon
+
+[Run 39365488563](https://github.com/flcl42/bls-net/actions/runs/39365488563) measures library `7f94ab9` and runtime `c318f5ac` with three alternating repetitions per host/policy. Linux uses a pinned core; the Apple M1 VM is unpinned and noisier. Both platforms pass 8,107,680 checks under each policy and all 25 JIT fixtures in every one of twenty Release/Checked stress/tiering configurations. The five-platform stock-runtime CI also passes. This runtime predates the further V3/V4/V5/V7 correctness fixes; these are historical measurements, and the current patch is required for general correctness.
+
+Times are **µs**. Each triplet is **stock .NET 11 / patched / blst**, with the native median from the patched process.
+
+| Operation | Linux stock / patched / blst | Patched/blst | Apple stock / patched / blst | Patched/blst |
+|---|---:|---:|---:|---:|
+| Fp multiply | 0.112 / 0.036 / 0.039 | 0.91x | 0.102 / 0.027 / 0.031 | 0.86x |
+| Fp square | 0.094 / 0.034 / 0.034 | 0.99x | 0.087 / 0.028 / 0.027 | 1.04x |
+| Fp2 multiply | 0.334 / 0.108 / 0.113 | 0.96x | 0.322 / 0.080 / 0.094 | 0.86x |
+| Fp2 square | 0.243 / 0.078 / 0.085 | 0.92x | 0.223 / 0.060 / 0.063 | 0.96x |
+| Fr mul+add | 0.059 / 0.021 / 0.024 | 0.88x | 0.061 / 0.021 / 0.024 | 0.89x |
+| Fp mul+add | 0.129 / 0.041 / 0.045 | 0.92x | 0.129 / 0.037 / 0.048 | 0.77x |
+| Fp inverse (variable, same inputs) | 3.480 / 2.827 / 2.857 | 0.99x | 2.572 / 1.904 / 2.948 | 0.65x |
+| Fp12 multiply | 6.030 / 2.145 / 2.157 | 0.99x | 5.186 / 1.670 / 1.819 | 0.92x |
+| Fp12 square | 4.413 / 1.532 / 1.543 | 0.99x | 3.825 / 1.218 / 1.235 | 0.99x |
+| Pairing check 2 | 2377.722 / 818.457 / 853.399 | 0.96x | 2103.100 / 645.875 / 741.454 | 0.87x |
+| G1 multiply | 197.028 / 69.292 / 89.114 | 0.78x | 180.750 / 54.875 / 79.125 | 0.69x |
+| G2 multiply | 368.145 / 123.872 / 183.341 | 0.68x | 328.042 / 93.291 / 147.583 | 0.63x |
+| G1 MSM 128 | 8084.695 / 2865.264 / 3410.600 | 0.84x | 7451.375 / 2346.791 / 2761.000 | 0.85x |
+| G2 MSM 128 | 14890.741 / 5339.568 / 9167.165 | 0.58x | 13429.375 / 4159.667 / 7422.500 | 0.56x |
+| map G1 | 116.808 / 43.926 / 44.781 | 0.98x | 112.041 / 36.625 / 39.291 | 0.93x |
+| map G2 | 444.484 / 153.006 / 160.550 | 0.95x | 405.292 / 121.500 / 132.125 | 0.92x |
+
+Fp2 multiplication improves from parity to 0.96x blst on Linux. The same-input variable inverse, Fp square and Fp12 multiply/square remain too close to parity for a clear-win claim. Apple silicon confirms most gains, but its Fp square is 1.04x blst. Raw product and reduction samples are now repeated; native columns remain unavailable until the optional reference-library build hook is authorized. The original public blst controls remain unchanged.
+
+The next candidate uses whole cross-product carry rows in square, keeps the wide Karatsuba sum in registers, uses disjoint raw products in the tower, and unrolls the regular inverse's modular coefficient update. Local source tests pass 8,348,548 checks under both policies on stock .NET 10/11 and patched x64. Fresh captures retain identical instructions for all 171 common x64 audit methods and all 147 common regular-operation methods. The paired constant-time inversion experiment remains shelved. Native hardware results for this next candidate and the latest review fixes are pending.
+
 ### ARM64 generated code
 
-Local Windows-ABI ARM64 AltJit captures compare the original library/runtime with the ARM64 kernels and runtime `c318f5ac`. Counts include fixed loop repetitions, managed/native wrappers and symbolically resolved arithmetic callees. blst counts use its generated ELF ARMv8 assembly, including bare returns; ABI and scheduling differences remain. The dedicated inverse row counts one loop step, not a complete batch or inversion.
+Local Windows-ABI ARM64 AltJit captures compare the original library/runtime with the ARM64 kernels and runtime `00403488`. Counts include fixed loop repetitions, managed/native wrappers and symbolically resolved arithmetic callees. blst counts use its generated ELF ARMv8 assembly, including bare returns; ABI and scheduling differences remain. The dedicated inverse row counts one loop step, not a complete batch or inversion.
 
 | Kernel | Original managed, runtime 74ed6106 | ARM64 candidate | blst ARM64 |
 |---|---:|---:|---:|
 | Fp multiply | 567 | 356 | 370 |
-| Fp square | 458 | 302 | 313 |
+| Fp square | 458 | 292 | 313 |
 | Fp raw product | 217 | 165 | 180 |
 | Fp raw product, preserving aliases | 223 | 166 | 180 |
 | Fp positive wide reduction | 341 | 200 | 204 |

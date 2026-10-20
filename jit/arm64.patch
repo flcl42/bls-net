@@ -1,5 +1,5 @@
 diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
-index bac51326..43ddd58d 100644
+index bac51326..3a256cad 100644
 --- a/src/coreclr/jit/lower.cpp
 +++ b/src/coreclr/jit/lower.cpp
 @@ -9818,16 +9818,15 @@ void Lowering::AfterLowerBlocks()
@@ -20,7 +20,55 @@ index bac51326..43ddd58d 100644
  }
  #endif // !TARGET_WASM
  
-@@ -15097,6 +15096,8 @@ bool Lowering::TryLowerMultiplyCarryRows()
+@@ -12100,11 +12099,22 @@ bool Lowering::TryMakeIndirsAdjacent(GenTreeIndir* prevIndir, GenTreeIndir* indi
+ 
+     m_scratchSideEffects.Clear();
+ 
+-    bool sawData = false;
++    bool sawData             = false;
++    bool movedPreservesFlags = true;
++    bool keptConsumesFlags   = false;
+     for (GenTree* cur = prevIndir->gtNext; cur != indir; cur = cur->gtNext)
+     {
+         if ((cur->gtLIRFlags & LIR::Flags::Mark) != 0)
+         {
++            // These nodes move across unrelated nodes. Flags are implicit LIR
++            // dependencies, so SideEffectSet cannot prove such moves safe.
++            // Plain loads/stores may still cross flag-producing arithmetic.
++            if (cur->gtSetFlags() || cur->OperConsumesFlags())
++            {
++                JITDUMP("Giving up due to moved flags dependency at [%06u]\n", Compiler::dspTreeID(cur));
++                return false;
++            }
++            movedPreservesFlags &= IsCarryFlagsCrossing(cur);
+             // 'cur' is part of data flow of 'indir', so we will be moving the
+             // currently recorded effects past 'cur'.
+             if (m_scratchSideEffects.InterferesWith(m_compiler, cur, true))
+@@ -12120,12 +12130,23 @@ bool Lowering::TryMakeIndirsAdjacent(GenTreeIndir* prevIndir, GenTreeIndir* indi
+         }
+         else
+         {
++            keptConsumesFlags |= cur->OperConsumesFlags();
+             // Not part of dataflow; add its effects that will move past
+             // 'indir'.
+             m_scratchSideEffects.AddNode(m_compiler, cur);
+         }
+     }
+ 
++    // Value relops and contained SELECT conditions can write NZCV without
++    // GTF_SET_FLAGS. If an existing flags edge ends at a node kept in place,
++    // every moved node must be proven flag-preserving. This still permits
++    // ordinary loads/stores to be paired across carry arithmetic.
++    if (keptConsumesFlags && !movedPreservesFlags)
++    {
++        JITDUMP("Giving up due to a kept flags consumer and a moved potential flags writer\n");
++        return false;
++    }
++
+     if (m_scratchSideEffects.InterferesWith(m_compiler, indir, true))
+     {
+         if (!indir->OperIsLoad())
+@@ -15097,6 +15118,8 @@ bool Lowering::TryLowerMultiplyCarryRows()
  }
  
  //------------------------------------------------------------------------
@@ -29,7 +77,7 @@ index bac51326..43ddd58d 100644
  // LowerMaskSelects: Turn constant-time selects written with a mask made from a
  // flags bit, or an explicitly masked low bit,
  //     mask = 0 - bit;  r_i = t_i ^ ((t_i ^ s_i) & mask)   (bit from a SETCC)
-@@ -15238,9 +15239,16 @@ bool Lowering::TryLowerMaskSelect()
+@@ -15238,9 +15261,16 @@ bool Lowering::TryLowerMaskSelect()
              cast = value;
              value = value->AsCast()->CastOp();
          }
@@ -49,7 +97,7 @@ index bac51326..43ddd58d 100644
          bool testBit = !canUseCC;
          if (testBit)
          {
-@@ -15254,8 +15262,10 @@ bool Lowering::TryLowerMaskSelect()
+@@ -15254,8 +15284,10 @@ bool Lowering::TryLowerMaskSelect()
              cast = nullptr;
          }
          GenTree*     cc       = testBit ? nullptr : value;
@@ -62,7 +110,7 @@ index bac51326..43ddd58d 100644
  
          // Every read of the mask value must be a select t ^ ((t ^ s) & mask).
          selects.clear();
-@@ -15372,6 +15382,34 @@ bool Lowering::TryLowerMaskSelect()
+@@ -15372,6 +15404,34 @@ bool Lowering::TryLowerMaskSelect()
              continue;
          }
  
@@ -97,7 +145,7 @@ index bac51326..43ddd58d 100644
          unsigned testedLocal = BAD_VAR_NUM;
          if (testBit)
          {
-@@ -15526,7 +15564,8 @@ bool Lowering::TryLowerMaskedXorSwap()
+@@ -15526,7 +15586,8 @@ bool Lowering::TryLowerMaskedXorSwap()
              bit = bit->AsCast()->CastOp();
          }
          bool fromAnd = bit->OperIs(GT_AND) && bit->gtGetOp2()->IsIntegralConst(1) && !bit->gtSetFlags();
@@ -107,7 +155,7 @@ index bac51326..43ddd58d 100644
          bool fromCC = bit->OperIs(GT_SETCC) && bit->gtPrev != nullptr && bit->gtPrev->gtSetFlags() &&
                        GenConditionDesc::Get(bit->AsCC()->gtCondition).oper == GT_NONE;
  
-@@ -15631,10 +15670,17 @@ bool Lowering::TryLowerMaskedXorSwap()
+@@ -15631,10 +15692,17 @@ bool Lowering::TryLowerMaskedXorSwap()
          if (!valid)
              continue;
  
@@ -126,7 +174,7 @@ index bac51326..43ddd58d 100644
  
              test->gtFlags |= GTF_SET_FLAGS;
              BlockRange().InsertBefore(bit, test);
-@@ -15689,6 +15735,7 @@ bool Lowering::TryLowerMaskedXorSwap()
+@@ -15689,6 +15757,7 @@ bool Lowering::TryLowerMaskedXorSwap()
  }
  
  //------------------------------------------------------------------------
@@ -134,7 +182,7 @@ index bac51326..43ddd58d 100644
  // FindMultiplyCarryStore: Find a local's sole store and sole read in this block.
  // Ordinary intermediates require a preceding store and cannot be live out.
  // A loop carry may be read before its store and observed on the exit edge.
-@@ -16644,6 +16691,32 @@ bool Lowering::LowerFullAdders()
+@@ -16644,6 +16713,36 @@ bool Lowering::LowerFullAdders()
      return changed;
  }
  
@@ -145,7 +193,11 @@ index bac51326..43ddd58d 100644
 +//
 +// A late mask rewrite can introduce a flag producer after carry forwarding.
 +// Check consumers before producers because ADCS/SBCS both read and write NZCV.
-+// Flags never flow between blocks. Exhausting the bounded scan is conservative.
++// Carry-loop rewrites do carry flags across seed/loop/finish block boundaries.
++// Their node whitelists exclude mask-producing NEG/XOR/AND nodes, and their
++// synthetic seed/finish blocks contain no masks, so mask candidates cannot
++// occur on those live-out flags edges. Broader loop matching would need an
++// inter-block flags check here. Exhausting the bounded scan is conservative.
 +bool Lowering::AreFlagsLiveBefore(GenTree* insertion)
 +{
 +    unsigned budget = 128;
@@ -167,7 +219,7 @@ index bac51326..43ddd58d 100644
  //------------------------------------------------------------------------
  // IsCarryFlagsCrossing: Check whether a node can sit between a carry producer
  // and its consumer without its code writing the flags.
-@@ -16737,7 +16810,40 @@ bool Lowering::IsCarryFlagsCrossing(GenTree* node)
+@@ -16737,7 +16836,40 @@ bool Lowering::IsCarryFlagsCrossing(GenTree* node)
              return false;
      }
  #else
@@ -209,7 +261,36 @@ index bac51326..43ddd58d 100644
  #endif
  }
  
-@@ -17675,6 +17781,309 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+@@ -16748,6 +16880,12 @@ bool Lowering::IsCarryFlagsCrossing(GenTree* node)
+ //
+ void Lowering::LowerCarryChains()
+ {
++#ifdef TARGET_ARM64
++    assert(!m_arm64CarryPostLowering);
++    m_arm64CarryPostLowering = true;
++    auto restoreCarryPhase = [this] { m_arm64CarryPostLowering = false; };
++    jitstd::utility::scoped_code<decltype(restoreCarryPhase)> restorePhase(restoreCarryPhase);
++#endif
+     // Match the method-size allowance in LowerFullAdders.
+     unsigned budget = 8192;
+     for (BasicBlock* block : m_compiler->Blocks())
+@@ -17576,6 +17714,15 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+             !IsCarryOperandAvailable(operands[0], availableAt, &moveStart[0]) ||
+             (combine && !IsCarryOperandAvailable(operands[1], availableAt, &moveStart[1])))
+         {
++#ifdef TARGET_ARM64
++            // During the main walk, a later carry comparison can turn an
++            // intervening non-S ADD/SUB into a flags writer. Only preserve a
++            // distant flags edge after every original block node is lowered.
++            if (!m_arm64CarryPostLowering)
++            {
++                continue;
++            }
++#endif
+             // A preceding output store can alias a following input load. Keep
+             // the final ADC/SBB at its original position instead of moving the
+             // load across that store, provided every surviving node preserves
+@@ -17675,6 +17822,333 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
  #endif // defined(TARGET_AMD64) || defined(TARGET_ARM64)
  
  #ifdef TARGET_ARM64
@@ -434,8 +515,9 @@ index bac51326..43ddd58d 100644
 +            continue;
 +        }
 +        bool valid = true;
-+        // The only relocated node is the carry's local read. Its reaching value
-+        // must be unchanged between its old position and the first addition.
++        // The carry read moves to the first addition, and the destination's
++        // user moves to the second addition. Both must keep their reaching
++        // local value; in-place destination updates can otherwise overwrite it.
 +        for (size_t i = begin; valid && i < end; i++)
 +        {
 +            Lane& lane = lanes[i];
@@ -461,6 +543,29 @@ index bac51326..43ddd58d 100644
 +                {
 +                    valid = false;
 +                    break;
++                }
++            }
++            if (valid && lane.destination->OperIsLocal())
++            {
++                if (!safeLocal(lane.destination))
++                {
++                    valid = false;
++                    break;
++                }
++                unsigned destination = lane.destination->AsLclVar()->GetLclNum();
++                for (GenTree* n = lane.destination->gtNext; n != lane.add[1]; n = n->gtNext)
++                {
++                    if (m_arm64RowScanBudget == 0)
++                    {
++                        return false;
++                    }
++                    m_arm64RowScanBudget--;
++                    if (n == nullptr || (n->OperIsLocalStore() &&
++                        n->AsLclVarCommon()->GetLclNum() == destination))
++                    {
++                        valid = false;
++                        break;
++                    }
 +                }
 +            }
 +        }
@@ -519,8 +624,33 @@ index bac51326..43ddd58d 100644
  //------------------------------------------------------------------------
  // LowerArm64MultiplyCarryLoops: Keep the last carry of each multiply-accumulate
  // in NZCV until the next limb, including across a counted loop's backedge.
+@@ -17905,6 +18379,24 @@ void Lowering::TryLowerArm64MultiplyCarryLoop()
+                 return;
+             }
+         }
++        // Like the straight-line rewrite, this pass changes the destination
++        // read's user to the second addition. Preserve its reaching value.
++        unsigned destination = lane.destination->AsLclVar()->GetLclNum();
++        LclVarDsc* destinationDsc = m_compiler->lvaGetDesc(destination);
++        if (destinationDsc->IsAddressExposed())
++        {
++            return;
++        }
++        for (GenTree* node = lane.destination->gtNext; node != lane.add[1]; node = node->gtNext)
++        {
++            if (node == nullptr ||
++                (node->OperIsLocalStore() && node->AsLclVarCommon()->GetLclNum() == destination) ||
++                (destinationDsc->lvIsStructField && node->OperIsLocal() &&
++                 node->AsLclVarCommon()->GetLclNum() == destinationDsc->lvParentLcl))
++            {
++                return;
++            }
++        }
+     }
+     GenTree* carryStore = findStore(lanes[0].carry, true);
+     if (carryStore == nullptr || definition(carryStore->gtGetOp1()) != lanes[laneCount - 1].adc[1])
 diff --git a/src/coreclr/jit/lower.h b/src/coreclr/jit/lower.h
-index ec018ddc..b7bc8590 100644
+index ec018ddc..7313fb67 100644
 --- a/src/coreclr/jit/lower.h
 +++ b/src/coreclr/jit/lower.h
 @@ -176,6 +176,9 @@ private:
@@ -559,7 +689,7 @@ index ec018ddc..b7bc8590 100644
  #endif
      GenTree* LowerJTrue(GenTreeOp* jtrue);
  #ifdef TARGET_RISCV64
-@@ -700,8 +705,15 @@ private:
+@@ -700,8 +705,16 @@ private:
      bool        m_hasAddCarry          = false;
      BasicBlock* m_lastSubtractionBlock = nullptr;
      unsigned    m_carryLocalScanBudget = 262144; // Node/block budget for current-IR dead-on-exit proofs.
@@ -571,6 +701,7 @@ index ec018ddc..b7bc8590 100644
      unsigned    m_maskSelectScanBudget = 65536; // Node visits for the block rescans of LowerMaskSelects.
 +#ifdef TARGET_ARM64
 +    unsigned    m_arm64RowScanBudget   = 65536; // Reference-link rebuilds after ARM64 row rewrites.
++    bool        m_arm64CarryPostLowering = false; // Only retain distant flags after all block nodes are lowered.
 +#endif
  #endif
  
@@ -786,6 +917,148 @@ index 00000000..4d8a3a86
 +    <Compile Include="Arm64FlagPreservation.cs" />
 +  </ItemGroup>
 +</Project>
+diff --git a/src/tests/JIT/opt/Add/Arm64LateFlags.cs b/src/tests/JIT/opt/Add/Arm64LateFlags.cs
+new file mode 100644
+index 00000000..796c586a
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64LateFlags.cs
+@@ -0,0 +1,121 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++public static unsafe class Arm64LateFlags
++{
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Add(ulong a, ulong b, ref ulong c)
++    {
++        ulong s = a + b, k = s < a ? 1UL : 0UL, t = s + c;
++        c = k + (t < s ? 1UL : 0UL);
++        return t;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LateFlags(ulong a, ulong b, ulong c, ulong z)
++    {
++        ulong t = Add(a, b, ref c);
++        return (z ^ t) + c;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LateFlags2(ulong a, ulong b, ulong c, ulong z)
++    {
++        ulong s = a + b, k = s < a ? 1UL : 0UL, t = s + c;
++        return (z ^ t) + k + (t < s ? 1UL : 0UL);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint LateFlags32(uint a, uint b, uint c, uint z)
++    {
++        uint s = a + b, k = s < a ? 1U : 0U, t = s + c;
++        return (z ^ t) + k + (t < s ? 1U : 0U);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LateBorrow(ulong a, ulong b, ulong c, ulong z)
++    {
++        ulong s = a - b, k = a < b ? 1UL : 0UL, t = s - c;
++        return (z ^ t) - k - (s < c ? 1UL : 0UL);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint LateBorrow32(uint a, uint b, uint c, uint z)
++    {
++        uint s = a - b, k = a < b ? 1U : 0U, t = s - c;
++        return (z ^ t) - k - (s < c ? 1U : 0U);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LateStore(ulong a, ulong b, ulong c, ulong z, ulong* r)
++    {
++        ulong t = Add(a, b, ref c);
++        r[0] = t; r[1] = c;
++        return (z ^ t) + c;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LateFlags3(ulong a0, ulong b0, ulong a1, ulong b1, ulong z, ulong* r)
++    {
++        ulong c = 0;
++        r[0] = Add(a0, b0, ref c);
++        ulong t = Add(a1, b1, ref c);
++        return (z ^ t) + c;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LateProduct(ulong a, ulong x, ulong c)
++    {
++        x += a; c += x < a ? 1UL : 0UL;
++        ulong high = Math.BigMul(a, x, out ulong low), s = low + a;
++        high += s < low ? 1UL : 0UL;
++        ulong result = s + c;
++        c = high + (result < s ? 1UL : 0UL);
++        return result ^ c;
++    }
++
++    [Fact]
++    public static int TestEntryPoint()
++    {
++        ulong[] values = { 0, 1, 2, 3, uint.MaxValue, 1UL << 32, 1UL << 63, ulong.MaxValue - 1, ulong.MaxValue };
++        ulong* r = stackalloc ulong[2];
++        for (int n = 0; n < 100; n++)
++        foreach (ulong a in values)
++        foreach (ulong b in values)
++        foreach (ulong c in values)
++        {
++            ulong z = values[(n + 3) % values.Length];
++            UInt128 sum = (UInt128)a + b + c;
++            ulong expected = unchecked((z ^ (ulong)sum) + (ulong)(sum >> 64));
++            if (LateFlags(a, b, c, z) != expected || LateFlags2(a, b, c, z) != expected)
++                throw new Exception("Late ADD flags overwrote a forwarded carry");
++            if (LateStore(a, b, c, z, r) != expected || r[0] != (ulong)sum || r[1] != (ulong)(sum >> 64))
++                throw new Exception("Late carry store");
++            UInt128 first = (UInt128)a + b, second = (UInt128)c + z + (ulong)(first >> 64);
++            ulong expectedChain = unchecked(((a ^ b) ^ (ulong)second) + (ulong)(second >> 64));
++            if (LateFlags3(a, b, c, z, a ^ b, r) != expectedChain || r[0] != (ulong)first)
++                throw new Exception("Late carry in two-limb chain");
++            ulong productCarry = unchecked(c + (ulong)(first >> 64));
++            UInt128 product = (UInt128)a * (ulong)first + a + productCarry;
++            if (LateProduct(a, b, c) != ((ulong)product ^ (ulong)(product >> 64)))
++                throw new Exception("Late product carry");
++            UInt128 biased = ((UInt128)2 << 64) + a - b - c;
++            ulong borrow = 2 - (ulong)(biased >> 64);
++            if (LateBorrow(a, b, c, z) != unchecked((z ^ (ulong)biased) - borrow))
++                throw new Exception("Late SUB flags overwrote a forwarded borrow");
++            uint aa = (uint)a, bb = (uint)b, cc = (uint)c, zz = (uint)z;
++            ulong sum32 = (ulong)aa + bb + cc;
++            uint expected32 = unchecked((zz ^ (uint)sum32) + (uint)(sum32 >> 32));
++            if (LateFlags32(aa, bb, cc, zz) != expected32) throw new Exception("Late uint carry");
++            ulong biased32 = (2UL << 32) + aa - bb - cc;
++            uint borrow32 = 2 - (uint)(biased32 >> 32);
++            if (LateBorrow32(aa, bb, cc, zz) != unchecked((zz ^ (uint)biased32) - borrow32))
++                throw new Exception("Late uint borrow");
++        }
++        return 100;
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/Arm64LateFlags.csproj b/src/tests/JIT/opt/Add/Arm64LateFlags.csproj
+new file mode 100644
+index 00000000..c1174cd0
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64LateFlags.csproj
+@@ -0,0 +1,9 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
++  </PropertyGroup>
++  <ItemGroup><Compile Include="Arm64LateFlags.cs" /></ItemGroup>
++</Project>
 diff --git a/src/tests/JIT/opt/Add/Arm64MaskCarry.cs b/src/tests/JIT/opt/Add/Arm64MaskCarry.cs
 new file mode 100644
 index 00000000..52144da1
@@ -975,6 +1248,391 @@ index 00000000..9c43b192
 +  <ItemGroup>
 +    <Compile Include="Arm64MaskCarry.cs" />
 +  </ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/Arm64PairedFlags.cs b/src/tests/JIT/opt/Add/Arm64PairedFlags.cs
+new file mode 100644
+index 00000000..0ce1eff7
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64PairedFlags.cs
+@@ -0,0 +1,190 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++public static unsafe class Arm64PairedFlags
++{
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static void StoreCarry(ulong a, ulong b, ulong x, ulong* r)
++    {
++        r[0] = x;
++        ulong s = a + b;
++        r[1] = s < a ? 1UL : 0UL;
++        r[2] = s;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static void StoreAdc(ulong a, ulong b, ulong h, ulong x, ulong* r)
++    {
++        r[0] = x;
++        ulong s = a + b;
++        r[1] = h + (s < a ? 1UL : 0UL);
++        r[2] = s;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static void StoreCarry32(uint a, uint b, uint x, uint* r)
++    {
++        r[0] = x;
++        uint s = a + b;
++        r[1] = s < a ? 1U : 0U;
++        r[2] = s;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static void StoreBorrow(ulong a, ulong b, ulong x, ulong* r)
++    {
++        r[0] = x;
++        ulong d = a - b;
++        r[1] = a < b ? 1UL : 0UL;
++        r[2] = d;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LoadCarry(ulong a, ulong b, ulong* p, ulong* r)
++    {
++        ulong x = p[0], s = a + b;
++        ulong y = p[1] + (s < a ? 1UL : 0UL);
++        r[0] = s;
++        return x ^ y;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong KeepCarry(ulong a, ulong b, ulong h, ulong x, ulong y, ulong* r)
++    {
++        ulong s = a + b;
++        r[0] = s;
++        h ^= x;
++        ulong high = h + (s < a ? 1UL : 0UL);
++        ulong u = x + y;
++        r[1] = u < x ? 1UL : 0UL;
++        r[2] = u;
++        return high;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint KeepCmp6(uint a, uint b, uint h, uint x, uint y, uint* r)
++    {
++        uint s = a + b;
++        r[0] = s;
++        h = ~h;
++        uint high = h + (s < a ? 1U : 0U);
++        r[1] = x < y ? 1U : 0U;
++        return (high ^ h) + high;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong KeepCmp7(ulong a, ulong b, ulong h, ulong x, ulong y, ulong* r)
++    {
++        ulong s = a + b;
++        r[0] = s;
++        h = ~h;
++        ulong high = h + (s < a ? 1UL : 0UL);
++        r[1] = x < y ? 1UL : 0UL;
++        return (high ^ h) + high;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint KeepSelect32(uint a, uint b, uint h, uint x, uint y, uint* r)
++    {
++        uint s = a + b;
++        r[0] = s;
++        h = ~h;
++        uint high = h + (s < a ? 1U : 0U);
++        r[1] = x < y ? x : y;
++        return (high ^ h) + high;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong KeepSelect64(ulong a, ulong b, ulong h, ulong x, ulong y, ulong* r)
++    {
++        ulong s = a + b;
++        r[0] = s;
++        h = ~h;
++        ulong high = h + (s < a ? 1UL : 0UL);
++        r[1] = x < y ? x : y;
++        return (high ^ h) + high;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint KeepTest32(uint a, uint b, uint h, uint x, uint y, uint* r)
++    {
++        uint s = a + b;
++        r[0] = s;
++        h = ~h;
++        uint high = h + (s < a ? 1U : 0U);
++        r[1] = (x & y) == 0 ? 1U : 0U;
++        return (high ^ h) + high;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong KeepTest64(ulong a, ulong b, ulong h, ulong x, ulong y, ulong* r)
++    {
++        ulong s = a + b;
++        r[0] = s;
++        h = ~h;
++        ulong high = h + (s < a ? 1UL : 0UL);
++        r[1] = (x & y) != 0 ? 1UL : 0UL;
++        return (high ^ h) + high;
++    }
++
++    [Fact]
++    public static int TestEntryPoint()
++    {
++        ulong[] values = { 0, 1, 2, 7, 0x80000000, 0xffffffff, 1UL << 32, 1UL << 63, ulong.MaxValue };
++        ulong* r = stackalloc ulong[3];
++        ulong* p = stackalloc ulong[2];
++        for (int n = 0; n < 100; n++)
++        foreach (ulong a in values)
++        foreach (ulong b in values)
++        {
++            ulong x = unchecked(a + (ulong)n), h = unchecked(b - (ulong)n);
++            UInt128 sum = (UInt128)a + b;
++            ulong c = (ulong)(sum >> 64);
++            StoreCarry(a, b, x, r);
++            if (r[0] != x || r[1] != c || r[2] != (ulong)sum) throw new Exception("Paired carry store");
++            StoreAdc(a, b, h, x, r);
++            if (r[0] != x || r[1] != unchecked(h + c) || r[2] != (ulong)sum) throw new Exception("Paired ADC store");
++            StoreBorrow(a, b, x, r);
++            if (r[0] != x || r[1] != (a < b ? 1UL : 0UL) || r[2] != unchecked(a - b)) throw new Exception("Paired borrow store");
++            uint* r32 = (uint*)r;
++            uint aa = (uint)a, bb = (uint)b;
++            ulong sum32 = (ulong)aa + bb;
++            StoreCarry32(aa, bb, (uint)x, r32);
++            if (r32[0] != (uint)x || r32[1] != (uint)(sum32 >> 32) || r32[2] != (uint)sum32) throw new Exception("Paired uint carry store");
++            p[0] = x; p[1] = h;
++            ulong loaded = LoadCarry(a, b, p, r);
++            if (loaded != (x ^ unchecked(h + c)) || r[0] != (ulong)sum) throw new Exception("Paired carry load");
++            ulong y = values[(n + 3) % values.Length];
++            UInt128 otherSum = (UInt128)x + y;
++            ulong kept = KeepCarry(a, b, h, x, y, r);
++            if (kept != unchecked((h ^ x) + c) || r[0] != (ulong)sum || r[1] != (ulong)(otherSum >> 64) || r[2] != (ulong)otherSum)
++                throw new Exception("Paired store used the previous arithmetic flags");
++            uint h32 = ~(uint)h, high32 = unchecked(h32 + (uint)(sum32 >> 32));
++            uint expected32 = unchecked((high32 ^ h32) + high32);
++            uint cmp32 = KeepCmp6(aa, bb, (uint)h, (uint)x, (uint)y, r32);
++            if (cmp32 != expected32 || r32[0] != (uint)sum32 || r32[1] != ((uint)x < (uint)y ? 1U : 0U))
++                throw new Exception("Paired uint comparison clobbered carry");
++            cmp32 = KeepSelect32(aa, bb, (uint)h, (uint)x, (uint)y, r32);
++            if (cmp32 != expected32 || r32[0] != (uint)sum32 || r32[1] != ((uint)x < (uint)y ? (uint)x : (uint)y))
++                throw new Exception("Paired uint selection clobbered carry");
++            ulong high64 = unchecked(~h + c), expected64 = unchecked((high64 ^ ~h) + high64);
++            ulong cmp64 = KeepCmp7(a, b, h, x, y, r);
++            if (cmp64 != expected64 || r[0] != (ulong)sum || r[1] != (x < y ? 1UL : 0UL))
++                throw new Exception("Paired ulong comparison clobbered carry");
++            cmp64 = KeepSelect64(a, b, h, x, y, r);
++            if (cmp64 != expected64 || r[0] != (ulong)sum || r[1] != (x < y ? x : y))
++                throw new Exception("Paired ulong selection clobbered carry");
++            cmp32 = KeepTest32(aa, bb, (uint)h, (uint)x, (uint)y, r32);
++            if (cmp32 != expected32 || r32[0] != (uint)sum32 || r32[1] != (((uint)x & (uint)y) == 0 ? 1U : 0U))
++                throw new Exception("Paired uint bit test clobbered carry");
++            cmp64 = KeepTest64(a, b, h, x, y, r);
++            if (cmp64 != expected64 || r[0] != (ulong)sum || r[1] != ((x & y) != 0 ? 1UL : 0UL))
++                throw new Exception("Paired ulong bit test clobbered carry");
++        }
++        return 100;
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/Arm64PairedFlags.csproj b/src/tests/JIT/opt/Add/Arm64PairedFlags.csproj
+new file mode 100644
+index 00000000..12bc3cbf
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64PairedFlags.csproj
+@@ -0,0 +1,9 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
++  </PropertyGroup>
++  <ItemGroup><Compile Include="Arm64PairedFlags.cs" /></ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/Arm64RowDestinations.cs b/src/tests/JIT/opt/Add/Arm64RowDestinations.cs
+new file mode 100644
+index 00000000..7824890d
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64RowDestinations.cs
+@@ -0,0 +1,153 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++public static unsafe class Arm64RowDestinations
++{
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Accumulate(ulong m, ulong a, ref ulong t, ulong c)
++    {
++        ulong h = Math.BigMul(m, a, out ulong l);
++        t += l; h += t < l ? 1UL : 0UL;
++        t += c; h += t < c ? 1UL : 0UL;
++        return h;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong RowDest(ulong* a, ulong* t, ulong* r, ulong m, ulong c)
++    {
++        ulong t0 = t[0], t1 = t[1];
++        c = Accumulate(m, a[0], ref t0, c);
++        c = Accumulate(m, a[1], ref t1, c);
++        r[0] = t0; r[1] = t1;
++        return c;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong RowDestParams(ulong m, ulong a0, ulong a1, ulong t0, ulong t1, ulong c, ulong* r)
++    {
++        ulong h0 = Math.BigMul(m, a0, out ulong l0);
++        t0 += l0; h0 += t0 < l0 ? 1UL : 0UL;
++        t0 += c; h0 += t0 < c ? 1UL : 0UL;
++        ulong h1 = Math.BigMul(m, a1, out ulong l1);
++        t1 += l1; h1 += t1 < l1 ? 1UL : 0UL;
++        t1 += h0; h1 += t1 < h0 ? 1UL : 0UL;
++        r[0] = t0; r[1] = t1;
++        return h1;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong RowDestReversed(ulong m, ulong a0, ulong a1, ulong t0, ulong t1, ulong c, ulong* r)
++    {
++        ulong h0 = Math.BigMul(m, a0, out ulong l0);
++        t0 = l0 + t0; h0 += t0 < l0 ? 1UL : 0UL;
++        t0 = c + t0; h0 += t0 < c ? 1UL : 0UL;
++        ulong h1 = Math.BigMul(m, a1, out ulong l1);
++        t1 = l1 + t1; h1 += t1 < l1 ? 1UL : 0UL;
++        t1 = h0 + t1; h1 += t1 < h0 ? 1UL : 0UL;
++        r[0] = t0; r[1] = t1;
++        return h1;
++    }
++
++    // This order already reads each destination at the second addition.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong RowCarryFirst(ulong m, ulong a0, ulong a1, ulong t0, ulong t1, ulong c, ulong* r)
++    {
++        ulong h0 = Math.BigMul(m, a0, out ulong l0), s0 = l0 + c;
++        h0 += s0 < l0 ? 1UL : 0UL;
++        t0 += s0; h0 += t0 < s0 ? 1UL : 0UL;
++        ulong h1 = Math.BigMul(m, a1, out ulong l1), s1 = l1 + h0;
++        h1 += s1 < l1 ? 1UL : 0UL;
++        t1 += s1; h1 += t1 < s1 ? 1UL : 0UL;
++        r[0] = t0; r[1] = t1;
++        return h1;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong RowDestRedef(ulong m, ulong a0, ulong a1, ulong d0, ulong d1, ulong c, ulong* r)
++    {
++        ulong h0 = Math.BigMul(m, a0, out ulong l0), p0 = l0 + d0;
++        h0 += p0 < l0 ? 1UL : 0UL;
++        d0 = r[2];
++        ulong q0 = p0 + c; h0 += q0 < c ? 1UL : 0UL;
++        ulong h1 = Math.BigMul(m, a1, out ulong l1), p1 = l1 + d1;
++        h1 += p1 < l1 ? 1UL : 0UL;
++        ulong q1 = p1 + h0; h1 += q1 < h0 ? 1UL : 0UL;
++        r[0] = q0 + d0; r[1] = q1;
++        return h1;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LoopDest(ulong* a, ulong* t, ulong* r, ulong m, ulong c, int n)
++    {
++        do
++        {
++            ulong d = t[0], h = Math.BigMul(m, a[0], out ulong l), p = l + d;
++            h += p < l ? 1UL : 0UL;
++            d = r[1];
++            ulong q = p + c; h += q < c ? 1UL : 0UL;
++            r[0] = q + d;
++            c = h; a++; t++; r++;
++        } while (--n != 0);
++        return c;
++    }
++
++    private static ulong Next(ref ulong state, int index)
++    {
++        state ^= state << 13; state ^= state >> 7; state ^= state << 17;
++        return (index & 7) switch { 0 => 0, 1 => 1, 2 => ulong.MaxValue, 3 => 1UL << 63, _ => state };
++    }
++
++    [Fact]
++    public static int TestEntryPoint()
++    {
++        ulong state = 0x123456789abcdef1;
++        ulong* a = stackalloc ulong[4];
++        ulong* t = stackalloc ulong[4];
++        ulong* r = stackalloc ulong[5];
++        ulong* expected = stackalloc ulong[5];
++        for (int i = 0; i < 50000; i++)
++        {
++            ulong m = Next(ref state, i), c = Next(ref state, i + 1);
++            a[0] = Next(ref state, i + 2); a[1] = Next(ref state, i + 3);
++            t[0] = Next(ref state, i + 4); t[1] = Next(ref state, i + 5);
++            UInt128 s = (UInt128)m * a[0] + t[0] + c;
++            ulong e0 = (ulong)s;
++            s = (UInt128)m * a[1] + t[1] + (ulong)(s >> 64);
++            ulong e1 = (ulong)s, high = (ulong)(s >> 64);
++            Check(RowDest(a, t, r, m, c), r, e0, e1, high);
++            Check(RowDestParams(m, a[0], a[1], t[0], t[1], c, r), r, e0, e1, high);
++            Check(RowDestReversed(m, a[0], a[1], t[0], t[1], c, r), r, e0, e1, high);
++            Check(RowCarryFirst(m, a[0], a[1], t[0], t[1], c, r), r, e0, e1, high);
++            r[2] = Next(ref state, i + 6);
++            ulong redefined = r[2];
++            Check(RowDestRedef(m, a[0], a[1], t[0], t[1], c, r), r, unchecked(e0 + redefined), e1, high);
++            t[0] = 7; t[1] = 11; a[0] = 3; a[1] = 5;
++            Check(RowDest(a, t, t, 2, 1), t, 14, 21, 0);
++            a[0] = 3; a[1] = 5;
++            Check(RowDest(a, t, a, 2, 1), a, 21, 31, 0);
++            a[2] = Next(ref state, i + 2); t[2] = Next(ref state, i + 3);
++            for (int j = 0; j < 5; j++) expected[j] = r[j] = Next(ref state, i + j);
++            ulong expectedCarry = c;
++            for (int j = 0; j < 3; j++)
++            {
++                UInt128 step = (UInt128)m * a[j] + t[j] + expectedCarry;
++                expected[j] = unchecked((ulong)step + expected[j + 1]);
++                expectedCarry = (ulong)(step >> 64);
++            }
++            if (LoopDest(a, t, r, m, c, 3) != expectedCarry) throw new Exception("Counted row carry");
++            for (int j = 0; j < 5; j++)
++                if (r[j] != expected[j]) throw new Exception("Counted row destination redefinition");
++        }
++        return 100;
++    }
++
++    private static void Check(ulong actual, ulong* r, ulong low, ulong middle, ulong high)
++    {
++        if (actual != high || r[0] != low || r[1] != middle)
++            throw new Exception("Destination read crossed a local redefinition");
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/Arm64RowDestinations.csproj b/src/tests/JIT/opt/Add/Arm64RowDestinations.csproj
+new file mode 100644
+index 00000000..2c73fb2d
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64RowDestinations.csproj
+@@ -0,0 +1,9 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
++  </PropertyGroup>
++  <ItemGroup><Compile Include="Arm64RowDestinations.cs" /></ItemGroup>
 +</Project>
 diff --git a/src/tests/JIT/opt/Add/Arm64TestMasks.cs b/src/tests/JIT/opt/Add/Arm64TestMasks.cs
 new file mode 100644

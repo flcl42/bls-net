@@ -25,11 +25,24 @@ internal static class WideTower
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     private static void Multiply2Expanded(out Fp2Wide result, in Fp2 a, in Fp2 b)
     {
-        Fp.MultiplyWide(out result.C0, a.C0, b.C0);
-        Fp.MultiplyWide(out FpWide t1, a.C1, b.C1);
+        FpWide t1;
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            // The narrow inputs and wide output/scratch are distinct here.
+            Fp.MultiplyWideNoAlias(out result.C0, a.C0, b.C0);
+            Fp.MultiplyWideNoAlias(out t1, a.C1, b.C1);
+        }
+        else
+        {
+            Fp.MultiplyWide(out result.C0, a.C0, b.C0);
+            Fp.MultiplyWide(out t1, a.C1, b.C1);
+        }
         Fp.AddUnreduced(out Fp sa, a.C0, a.C1);
         Fp.AddUnreduced(out Fp sb, b.C0, b.C1);
-        Fp.MultiplyWide(out result.C1, sa, sb);
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+            Fp.MultiplyWideNoAlias(out result.C1, sa, sb);
+        else
+            Fp.MultiplyWide(out result.C1, sa, sb);
         Fp.SubtractWideProducts(ref result.C0, t1, ref result.C1);
     }
 

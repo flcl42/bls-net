@@ -167,6 +167,20 @@ internal static unsafe partial class TowerTests
         Fp positiveQuotient = RawField(x + P);
         Fp.ReduceWideSmallCorrectArm64(out corrected, positiveQuotient);
         CheckReduced(corrected, x, "ARM64 positive small correction");
+        BigInteger inverse31 = (RInverse << 353) % P;
+        long f31 = (long)(x & 0x7fffffff), g31 = (1L << 31) - f31;
+        foreach ((long f, long g) in new (long, long)[] { (f31, g31), (f31, -g31), (-f31, g31), (-f31, -g31), (1L << 31, 0), (0, -(1L << 31)) })
+        {
+            BigInteger expected31 = (f * x + g * y) * inverse31;
+            Fp.ApplyCoefficientMatrix31Arm64(out corrected, a, b, f, g);
+            CheckReduced(corrected, expected31, "ARM64 regular 31-step modular coefficient");
+            Fp coefficientAlias = a;
+            Fp.ApplyCoefficientMatrix31Arm64(out coefficientAlias, coefficientAlias, b, f, g);
+            CheckReduced(coefficientAlias, expected31, "ARM64 regular coefficient first alias");
+            coefficientAlias = b;
+            Fp.ApplyCoefficientMatrix31Arm64(out coefficientAlias, a, coefficientAlias, f, g);
+            CheckReduced(coefficientAlias, expected31, "ARM64 regular coefficient second alias");
+        }
         BigInteger fullQuotient = 7 * x - 3 * P;
         Fp signedQuotient = RawField(fullQuotient & (R - 1));
         Fp.ReduceWideCorrectArm64(out corrected, signedQuotient);
@@ -177,6 +191,12 @@ internal static unsafe partial class TowerTests
         Fp.ReduceWideImaginaryArm64(out corrected, crossSum, firstSquare, secondSquare);
         CheckReduced(corrected, 2 * x * y * RInverse, "ARM64 fused imaginary reducer");
         FpWide crossAlias = crossSum;
+        FpWide realProduct = firstSquare, savedSecond = secondSquare;
+        Fp.SubtractWideProductsArm64(ref realProduct, secondSquare, ref crossAlias);
+        Check(Signed(realProduct) == x * x - y * y, "ARM64 wide product real difference");
+        Check(Signed(crossAlias) == 2 * x * y, "ARM64 wide product imaginary difference");
+        Check(Signed(secondSquare) == Signed(savedSecond), "ARM64 wide product preserves second input");
+        crossAlias = crossSum;
         Fp.ReduceWideImaginaryArm64(out Unsafe.As<FpWide, Fp>(ref crossAlias), crossAlias, firstSquare, secondSquare);
         CheckReduced(Unsafe.As<FpWide, Fp>(ref crossAlias), 2 * x * y * RInverse, "ARM64 fused imaginary sum alias");
         crossAlias = firstSquare;

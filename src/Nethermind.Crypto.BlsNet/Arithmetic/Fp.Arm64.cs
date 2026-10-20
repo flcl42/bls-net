@@ -54,10 +54,73 @@ public readonly partial struct Fp
         ReduceArm64(out result, quotient._l0, quotient._l1, quotient._l2, quotient._l3, quotient._l4, quotient._l5);
     }
 
+    // Three distinct product buffers. Forming the sum in registers avoids
+    // storing and reloading the intermediate imaginary difference. Arithmetic
+    // is modulo 2^768, so this rearrangement preserves the signed-wide result.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void SubtractWideProductsArm64(ref FpWide first, in FpWide second, ref FpWide sumProduct)
+    {
+        AddWideInline(out FpWide sum, first, second);
+        SubtractWideInline(out sumProduct, sumProduct, sum);
+        SubtractWideInline(out first, first, second);
+    }
+
     // An isolated leaf preserves carry/select recognition when the caller has
     // a loop or another large inlined arithmetic body. Both policies share it.
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
-    internal static void SquareArm64(out Fp result, in Fp value) => SquareExpanded(out result, value);
+    internal static void SquareArm64(out Fp result, in Fp value)
+    {
+        ulong a0 = value._l0, a1 = value._l1, a2 = value._l2;
+        ulong a3 = value._l3, a4 = value._l4, a5 = value._l5;
+        ulong r0, r1 = 0, r2 = 0, r3 = 0, r4 = 0, r5 = 0;
+        ulong r6 = 0, r7 = 0, r8 = 0, r9 = 0, r10 = 0, r11;
+        // Accumulate the fifteen cross products in whole low/high carry rows.
+        // Each row starts at 2i+1 and drains into a previously zero top word.
+        AddProductRowArm64(a0, a1, a2, a3, a4, a5, ref r1, ref r2, ref r3, ref r4, ref r5, ref r6);
+        AddProductRowArm64(a1, a2, a3, a4, a5, ref r3, ref r4, ref r5, ref r6, ref r7);
+        AddProductRowArm64(a2, a3, a4, a5, ref r5, ref r6, ref r7, ref r8);
+        AddProductRowArm64(a3, a4, a5, ref r7, ref r8, ref r9);
+        r10 = MulAdd(a4, a5, r9, 0, out r9);
+
+        ulong carry = 0;
+        r1 = AddCarry(r1, r1, ref carry);
+        r2 = AddCarry(r2, r2, ref carry);
+        r3 = AddCarry(r3, r3, ref carry);
+        r4 = AddCarry(r4, r4, ref carry);
+        r5 = AddCarry(r5, r5, ref carry);
+        r6 = AddCarry(r6, r6, ref carry);
+        r7 = AddCarry(r7, r7, ref carry);
+        r8 = AddCarry(r8, r8, ref carry);
+        r9 = AddCarry(r9, r9, ref carry);
+        r10 = AddCarry(r10, r10, ref carry);
+        carry = 0;
+        ulong h0 = Math.BigMul(a0, a0, out r0);
+        r1 = AddCarry(r1, h0, ref carry);
+        ulong h1 = Math.BigMul(a1, a1, out ulong d1);
+        r2 = AddCarry(r2, d1, ref carry);
+        r3 = AddCarry(r3, h1, ref carry);
+        ulong h2 = Math.BigMul(a2, a2, out ulong d2);
+        r4 = AddCarry(r4, d2, ref carry);
+        r5 = AddCarry(r5, h2, ref carry);
+        ulong h3 = Math.BigMul(a3, a3, out ulong d3);
+        r6 = AddCarry(r6, d3, ref carry);
+        r7 = AddCarry(r7, h3, ref carry);
+        ulong h4 = Math.BigMul(a4, a4, out ulong d4);
+        r8 = AddCarry(r8, d4, ref carry);
+        r9 = AddCarry(r9, h4, ref carry);
+        ulong h5 = Math.BigMul(a5, a5, out ulong d5);
+        r10 = AddCarry(r10, d5, ref carry);
+        r11 = h5 + carry;
+        FpWide wide = new()
+        {
+            L0 = r0, L1 = r1, L2 = r2, L3 = r3, L4 = r4, L5 = r5,
+            L6 = r6, L7 = r7, L8 = r8, L9 = r9, L10 = r10, L11 = r11,
+        };
+        // Canonical inputs give a^2 < p^2 < pR and a quotient below 2p.
+        // Output is delayed until every input limb has been consumed.
+        ReduceWideCoreArm64(out Fp quotient, wide);
+        ReduceArm64(out result, quotient._l0, quotient._l1, quotient._l2, quotient._l3, quotient._l4, quotient._l5);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void ReduceWideSmallCorrectArm64(out Fp result, in Fp quotient)
@@ -281,6 +344,69 @@ public readonly partial struct Fp
         t4 = AddCarry(t4, ProductHighArm64(m, a3), ref carry);
         t5 = AddCarry(t5, ProductHighArm64(m, a4), ref carry);
         t6 = top + ProductHighArm64(m, a5) + carry;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddProductRowArm64(ulong m, ulong a0, ulong a1, ulong a2, ulong a3, ulong a4,
+        ref ulong t0, ref ulong t1, ref ulong t2, ref ulong t3, ref ulong t4, ref ulong t5)
+    {
+        ulong carry = 0;
+        t0 = AddCarry(t0, m * a0, ref carry);
+        t1 = AddCarry(t1, m * a1, ref carry);
+        t2 = AddCarry(t2, m * a2, ref carry);
+        t3 = AddCarry(t3, m * a3, ref carry);
+        t4 = AddCarry(t4, m * a4, ref carry);
+        ulong top = t5 + carry;
+        carry = 0;
+        t1 = AddCarry(t1, ProductHighArm64(m, a0), ref carry);
+        t2 = AddCarry(t2, ProductHighArm64(m, a1), ref carry);
+        t3 = AddCarry(t3, ProductHighArm64(m, a2), ref carry);
+        t4 = AddCarry(t4, ProductHighArm64(m, a3), ref carry);
+        t5 = top + ProductHighArm64(m, a4) + carry;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddProductRowArm64(ulong m, ulong a0, ulong a1, ulong a2, ulong a3,
+        ref ulong t0, ref ulong t1, ref ulong t2, ref ulong t3, ref ulong t4)
+    {
+        ulong carry = 0;
+        t0 = AddCarry(t0, m * a0, ref carry);
+        t1 = AddCarry(t1, m * a1, ref carry);
+        t2 = AddCarry(t2, m * a2, ref carry);
+        t3 = AddCarry(t3, m * a3, ref carry);
+        ulong top = t4 + carry;
+        carry = 0;
+        t1 = AddCarry(t1, ProductHighArm64(m, a0), ref carry);
+        t2 = AddCarry(t2, ProductHighArm64(m, a1), ref carry);
+        t3 = AddCarry(t3, ProductHighArm64(m, a2), ref carry);
+        t4 = top + ProductHighArm64(m, a3) + carry;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddProductRowArm64(ulong m, ulong a0, ulong a1, ulong a2,
+        ref ulong t0, ref ulong t1, ref ulong t2, ref ulong t3)
+    {
+        ulong carry = 0;
+        t0 = AddCarry(t0, m * a0, ref carry);
+        t1 = AddCarry(t1, m * a1, ref carry);
+        t2 = AddCarry(t2, m * a2, ref carry);
+        ulong top = t3 + carry;
+        carry = 0;
+        t1 = AddCarry(t1, ProductHighArm64(m, a0), ref carry);
+        t2 = AddCarry(t2, ProductHighArm64(m, a1), ref carry);
+        t3 = top + ProductHighArm64(m, a2) + carry;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddProductRowArm64(ulong m, ulong a0, ulong a1, ref ulong t0, ref ulong t1, ref ulong t2)
+    {
+        ulong carry = 0;
+        t0 = AddCarry(t0, m * a0, ref carry);
+        t1 = AddCarry(t1, m * a1, ref carry);
+        ulong top = t2 + carry;
+        carry = 0;
+        t1 = AddCarry(t1, ProductHighArm64(m, a0), ref carry);
+        t2 = top + ProductHighArm64(m, a1) + carry;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
