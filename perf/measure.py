@@ -63,6 +63,13 @@ def run(host, dll, args, name, extra=None, pinned=False, success=0, timeout=900)
 def test():
     if platform.machine().lower() not in ('aarch64', 'arm64'):
         raise RuntimeError('Real ARM64 process required')
+    # Export the pinned archive's raw product and bounded REDC routines as well
+    # as its public field API, so reductions have a native timing reference.
+    with (OUT / 'native-kernel-build.txt').open('w') as output:
+        subprocess.run(['sh', str(ROOT / 'scripts/build-native-kernel-reference.sh')],
+                       cwd=ROOT, stdout=output, stderr=subprocess.STDOUT, check=True)
+    if not (ROOT / f'artifacts/native/libblst-kernels.{EXT}').is_file():
+        raise RuntimeError('Native raw-product/reduction reference missing')
     machine = {'system': platform.platform(), 'machine': platform.machine(),
                'processor': platform.processor(), 'stock_dotnet': str(STOCK),
                'affinity': sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else None}
@@ -86,6 +93,18 @@ def test():
                 run('patched', JIT_TESTS, [], f'jit-{config}-tier{tiering}-{stress}',
                     dict(settings, DOTNET_TieredCompilation=tiering), success=100)
     install_jit('Release')
+    # Capture the constant-time witness on the native CLR as well as the regular
+    # benchmark call graph. Keep this separate from all timed processes.
+    audit = OUT / 'constant-time-arm64.asm'
+    run('patched', TESTS, ['--constant-time-audit', '--no-native', '--expanded-kernels'],
+        'constant-time-arm64', {'DOTNET_JitDisasm': '*',
+         'DOTNET_JitDisasmAssemblies': 'Nethermind.Crypto.BlsNet;Nethermind.Crypto.BlsNet.Tests',
+         'DOTNET_JitStdOutFile': str(audit)})
+    if not audit.is_file() or 'Assembly listing' not in audit.read_text():
+        raise RuntimeError('Native ARM64 constant-time disassembly missing')
+    with (OUT / 'constant-time-inventory.txt').open('w') as output:
+        subprocess.run([sys.executable, str(ROOT / 'scripts/list-constant-time-jumps.py'), str(audit)],
+                       cwd=ROOT, stdout=output, stderr=subprocess.STDOUT, check=True)
 
 
 def bench():

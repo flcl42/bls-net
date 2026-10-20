@@ -89,8 +89,9 @@ public readonly partial struct Fp
         ReduceArm64(out result, reduced._l0, reduced._l1, reduced._l2, reduced._l3, reduced._l4, reduced._l5);
     }
 
-    // 3*t-2*a = 2*(t-a)+t lies in (-2p,3p), inside the full signed
-    // correction's (-3p,4p) contract. All original inputs precede output.
+    // 3*t-2*a = 2*(t-a)+t lies in (-2p,3p). Adding 2p only when
+    // negative leaves [0,3p); corrections by 2p and p canonicalize it.
+    // All original inputs precede output.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void TripleSubtractDoubleArm64(out Fp result, in Fp t, in Fp a)
     {
@@ -105,7 +106,18 @@ public readonly partial struct Fp
         ulong h3 = AddCarry(t._l3, (s3 << 1) | (s2 >> 63), ref carry);
         ulong h4 = AddCarry(t._l4, (s4 << 1) | (s3 >> 63), ref carry);
         ulong h5 = AddCarry(t._l5, (s5 << 1) | (s4 >> 63), ref carry);
-        ReduceWideCorrectArm64(out result, new Fp(h0, h1, h2, h3, h4, h5));
+        ref ulong c = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(Arm64WideCorrection.Limbs), 6);
+        ulong mask = 0UL - (h5 >> 63);
+        carry = 0;
+        h0 = AddCarry(h0, c & mask, ref carry);
+        h1 = AddCarry(h1, Unsafe.Add(ref c, 1) & mask, ref carry);
+        h2 = AddCarry(h2, Unsafe.Add(ref c, 2) & mask, ref carry);
+        h3 = AddCarry(h3, Unsafe.Add(ref c, 3) & mask, ref carry);
+        h4 = AddCarry(h4, Unsafe.Add(ref c, 4) & mask, ref carry);
+        h5 = AddCarry(h5, Unsafe.Add(ref c, 5) & mask, ref carry);
+        ReduceArm64(out Fp reduced, h0, h1, h2, h3, h4, h5,
+            c, Unsafe.Add(ref c, 1), Unsafe.Add(ref c, 2), Unsafe.Add(ref c, 3), Unsafe.Add(ref c, 4), Unsafe.Add(ref c, 5));
+        ReduceArm64(out result, reduced._l0, reduced._l1, reduced._l2, reduced._l3, reduced._l4, reduced._l5);
     }
 
     // An isolated leaf preserves carry/select recognition when the caller has

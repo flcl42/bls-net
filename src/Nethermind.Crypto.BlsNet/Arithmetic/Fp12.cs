@@ -119,14 +119,16 @@ public struct Fp12 : IEquatable<Fp12>
     internal static void CyclotomicSquareArm64(out Fp12 result, in Fp12 a)
     {
         SquareFp4Arm64(out Fp2 t00, out Fp2 t01, a.C0.C0, a.C1.C1);
+        // This pair feeds no other Fp4 square, including for result == a.
+        // Finish it before allocating the four cross-coupled temporaries.
+        Fp2Fused.TripleSubtractDoubleArm64(out result.C0.C0, t00, a.C0.C0);
+        Fp2Fused.TripleAddDoubleArm64(out result.C1.C1, t01, a.C1.C1);
         SquareFp4Arm64(out Fp2 t10, out Fp2 t11, a.C1.C0, a.C0.C2);
         SquareFp4Arm64(out Fp2 t20, out Fp2 t21, a.C0.C1, a.C1.C2);
-        Fp2Fused.TripleSubtractDoubleArm64(out result.C0.C0, t00, a.C0.C0);
         Fp2Fused.TripleSubtractDoubleArm64(out result.C0.C1, t10, a.C0.C1);
         Fp2Fused.TripleSubtractDoubleArm64(out result.C0.C2, t20, a.C0.C2);
         Fp2.MulByNonResidue(out t21, t21);
         Fp2Fused.TripleAddDoubleArm64(out result.C1.C0, t21, a.C1.C0);
-        Fp2Fused.TripleAddDoubleArm64(out result.C1.C1, t01, a.C1.C1);
         Fp2Fused.TripleAddDoubleArm64(out result.C1.C2, t11, a.C1.C2);
     }
 

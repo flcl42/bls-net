@@ -88,6 +88,13 @@ APIs or return types fail visibly rather than being skipped. Release and Checked
 JITs each run tiering 0/1 crossed with default, JitStress=1/2, JitStressRegs=1/3/8
 (24 named configurations). Reporting rejects missing or duplicate configurations.
 
+The measurement driver also builds the optional raw-product/REDC exports from
+the same pinned blst archive before functional tests. These short leaf imports
+suppress GC transitions, as do the other native field reference calls. After
+the stress matrix, a separate Release process captures the constant-time audit
+witness on native ARM64 and inventories its branches, calls and addresses.
+Neither audit process contributes to timing samples.
+
 Each host/policy first runs a full `--quick` sweep, followed by the filtered
 repetitions, alternating host order. Linux processes are pinned with `taskset` to
 the first allowed CPU. ReadyToRun and tiering are disabled for both hosts.
