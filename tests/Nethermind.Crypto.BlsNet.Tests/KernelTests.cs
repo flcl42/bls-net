@@ -70,6 +70,7 @@ internal static unsafe partial class TowerTests
                 CheckReduced(reduced, edge * RInverse, "small reducer signed bound edge");
                 ReduceSmallArm64ForTest(out reduced, x);
                 CheckReduced(reduced, edge * RInverse, "ARM64 signed small reducer edge");
+                TestSmallReducerSchedules(x, edge * RInverse);
                 TestWideDifference(x, default, edge);
                 if (edge.Sign >= 0)
                 {
@@ -158,6 +159,7 @@ internal static unsafe partial class TowerTests
             if ((i & 1) != 0) middle = -middle;
             FpWide medium = Wide(middle); Fp.ReduceWideSmall(out actual, medium);
             CheckReduced(actual, middle * RInverse, "small reduction vs BigInteger");
+            TestSmallReducerSchedules(medium, middle * RInverse);
             TestWideDifference(medium, wx, middle - x, checkBound: true);
             medium = Wide(BigInteger.Abs(middle));
             Fp.ReduceWidePositive(out actual, medium);
@@ -165,6 +167,33 @@ internal static unsafe partial class TowerTests
             TestFp2(Field2(), Field2());
         }
         Console.WriteLine("Kernels: 10,000 random signed wide/small reductions, raw products, unreduced sums, fused subtraction and Fp2 cases passed.");
+    }
+
+    private static void TestSmallReducerSchedules(in FpWide value, BigInteger expected)
+    {
+        for (int schedule = 0; schedule < 4; schedule++)
+        {
+            RunSmallReducerSchedule(schedule, out Fp result, value);
+            CheckReduced(result, expected, "ARM64 small schedule vs BigInteger");
+            FpWide alias = value;
+            RunSmallReducerSchedule(schedule, out Unsafe.As<FpWide, Fp>(ref alias), alias);
+            CheckReduced(Unsafe.As<FpWide, Fp>(ref alias), expected, "ARM64 small schedule low alias");
+            alias = value;
+            ref Fp upper = ref Unsafe.Add(ref Unsafe.As<FpWide, Fp>(ref alias), 1);
+            RunSmallReducerSchedule(schedule, out upper, alias);
+            CheckReduced(upper, expected, "ARM64 small schedule high alias");
+        }
+    }
+
+    private static void RunSmallReducerSchedule(int schedule, out Fp result, in FpWide value)
+    {
+        switch (schedule)
+        {
+            case 0: Fp.ReduceWideSmallLateArm64(out result, value); break;
+            case 1: Fp.ReduceWideSmallRow5Arm64(out result, value); break;
+            case 2: Fp.ReduceWideSmallHoistedArm64(out result, value); break;
+            default: Fp.ReduceWideSmallSignedHoistedArm64(out result, value); break;
+        }
     }
 
     private static void TestWideDifference(in FpWide a, in FpWide b, BigInteger difference, bool checkBound = false)

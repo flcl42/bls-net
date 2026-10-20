@@ -399,33 +399,14 @@ public readonly partial struct Fp
         ReduceWideCorrectArm64(out result, quotient);
     }
 
-    // |value|<pR gives q in (-p,2p). Form q+p and q-p independently:
-    // unsigned borrow selects q or q-p for nonnegative q; a separate sign
-    // select chooses q+p for negative q. Both carry chains can start from
-    // low words before the final quotient sign is ready.
+    // Preserve the earlier branch-free signed correction while the independent
+    // scheduling candidates are measured by the managed benchmark harness.
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void ReduceWideSmallArm64(out Fp result, in FpWide value)
     {
-        ReduceWideCoreArm64(out Fp q, value);
-        ref ulong m = ref MemoryMarshal.GetArrayDataReference(ModulusLimbs);
-        ulong m0 = m, m1 = Unsafe.Add(ref m, 1), m2 = Unsafe.Add(ref m, 2);
-        ulong m3 = Unsafe.Add(ref m, 3), m4 = Unsafe.Add(ref m, 4), m5 = Unsafe.Add(ref m, 5);
-        ulong carry = 0;
-        ulong p0 = AddCarry(q._l0, m0, ref carry), p1 = AddCarry(q._l1, m1, ref carry);
-        ulong p2 = AddCarry(q._l2, m2, ref carry), p3 = AddCarry(q._l3, m3, ref carry);
-        ulong p4 = AddCarry(q._l4, m4, ref carry), p5 = AddCarry(q._l5, m5, ref carry);
-        ulong borrow = 0;
-        ulong d0 = SubBorrow(q._l0, m0, ref borrow), d1 = SubBorrow(q._l1, m1, ref borrow);
-        ulong d2 = SubBorrow(q._l2, m2, ref borrow), d3 = SubBorrow(q._l3, m3, ref borrow);
-        ulong d4 = SubBorrow(q._l4, m4, ref borrow), d5 = SubBorrow(q._l5, m5, ref borrow);
-        ulong mask = ChoiceToMask(borrow);
-        d0 = Select(q._l0, d0, mask); d1 = Select(q._l1, d1, mask);
-        d2 = Select(q._l2, d2, mask); d3 = Select(q._l3, d3, mask);
-        d4 = Select(q._l4, d4, mask); d5 = Select(q._l5, d5, mask);
-        mask = 0UL - ((long)q._l5 < 0 ? 1UL : 0UL);
-        result = new Fp(Select(p0, d0, mask), Select(p1, d1, mask), Select(p2, d2, mask),
-            Select(p3, d3, mask), Select(p4, d4, mask), Select(p5, d5, mask));
+        ReduceWideCoreArm64(out Fp quotient, value);
+        ReduceWideSmallCorrectArm64(out result, quotient);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

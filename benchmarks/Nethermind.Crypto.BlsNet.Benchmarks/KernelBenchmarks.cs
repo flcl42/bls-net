@@ -14,7 +14,7 @@ internal static unsafe partial class TowerBenchmarks
         Fp2 a = Field2(), b = Field2();
         string[] names = ["Fp multiply", "Fp square", "Fp2 multiply", "Fp2 square", "Fp inverse",
             "MultiplyWide", "ReduceWide", "ReduceWideSmall", "AddWide", "SubtractWide", "AddUnreduced", "Halve", "Negate", "SubtractSumComposite",
-            "Fp add", "Fp subtract", "MultiplyComposite", "ReduceWidePositive", "ReduceWideDifference", "Fp2 add", "Fp2 subtract", "Fp2 mul by 3", "Fp2 mul by 4", "Fp2 mul by 8", "MultiplyWideNoAlias"];
+            "Fp add", "Fp subtract", "MultiplyComposite", "ReduceWidePositive", "ReduceWideDifference", "Fp2 add", "Fp2 subtract", "Fp2 mul by 3", "Fp2 mul by 4", "Fp2 mul by 8", "MultiplyWideNoAlias", "ReduceWideSmallLate", "ReduceWideSmallRow5", "ReduceWideSmallHoisted", "ReduceWideSmallSignedHoisted"];
         Fp.MultiplyWide(out FpWide x, a.C0, b.C0);
         Fp.MultiplyWide(out FpWide y, a.C1, b.C1);
         Console.WriteLine("Operation | managed ns | blst ns | managed bytes");
@@ -25,7 +25,7 @@ internal static unsafe partial class TowerBenchmarks
             if (BenchmarkOptions.Quick) count /= 10;
             double managed = MeasureKernel(op, false, count, a, b, x, y, out long allocated);
             bool hasReference = NativeAvailable && (op < 5 || op is 12 or 14 or 15 or 16 or 19 or 20 or 21 or 22 or 23 ||
-                NativeKernelReference.Available && op is 5 or 6 or 7 or 17 or 18 or 24);
+                NativeKernelReference.Available && op is 5 or 6 or 7 or 17 or 18 or 24 or 25 or 26 or 27 or 28);
             double native = hasReference ? MeasureKernel(op, true, count, a, b, x, y, out _) : double.NaN;
             Console.WriteLine($"{names[op]} | {managed:F2} | {native:F2} | {allocated}");
         }
@@ -64,7 +64,7 @@ internal static unsafe partial class TowerBenchmarks
                 case 3: for (int i = 0; i < count; i++) KernelNative.blst_fp2_sqr(out r2, a); break;
                 case 4: for (int i = 0; i < count; i++) KernelNative.blst_fp_inverse(out r, a.C0); break;
                 case 5: case 24: for (int i = 0; i < count; i++) NativeKernelReference.Multiply(out wide, a.C0, b.C0); break;
-                case 6: case 7: case 17: for (int i = 0; i < count; i++) NativeKernelReference.Reduce(out r, x); break;
+                case 6: case 7: case 17: case 25: case 26: case 27: case 28: for (int i = 0; i < count; i++) NativeKernelReference.Reduce(out r, x); break;
                 case 18: for (int i = 0; i < count; i++) NativeKernelReference.SubtractReduce(out r, x, y); break;
                 case 12: for (int i = 0; i < count; i++) KernelNative.blst_fp_cneg(out r, a.C0, 1); break;
                 case 14: for (int i = 0; i < count; i++) KernelNative.blst_fp_add(out r, a.C0, b.C0); break;
@@ -106,6 +106,10 @@ internal static unsafe partial class TowerBenchmarks
                 case 22: for (int i = 0; i < count; i++) Fp2.MulBy4(out r2, a); break;
                 case 23: for (int i = 0; i < count; i++) Fp2.MulBy8(out r2, a); break;
                 case 24: RunDisjointKernel(count, a.C0, b.C0, out wide); break;
+                case 25: for (int i = 0; i < count; i++) Fp.ReduceWideSmallLateArm64(out r, x); break;
+                case 26: for (int i = 0; i < count; i++) Fp.ReduceWideSmallRow5Arm64(out r, x); break;
+                case 27: for (int i = 0; i < count; i++) Fp.ReduceWideSmallHoistedArm64(out r, x); break;
+                case 28: for (int i = 0; i < count; i++) Fp.ReduceWideSmallSignedHoistedArm64(out r, x); break;
             }
         }
         _fpSink = r; _fp2Sink = r2; _wideSink = wide;
