@@ -373,6 +373,65 @@ public readonly partial struct Fp
         result = new Fp(h0, h1, h2, h3, h4, h5);
     }
 
+    // Full |value|<3pR reduction belongs to the variable-time Fp6/Fp12
+    // formulas. Secret Fp/Fp2, curve and map paths use the branch-free
+    // small/positive/difference reducers instead. Strict top-word bounds
+    // prove canonicality without inspecting the lower words.
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void ReduceWideVariableArm64(out Fp result, in FpWide value)
+    {
+        ReduceWideCoreArm64(out Fp quotient, value);
+        ref ulong modulus = ref MemoryMarshal.GetArrayDataReference(ModulusLimbs);
+        ulong top = Unsafe.Add(ref modulus, 5);
+        if (quotient._l5 < top)
+        {
+            result = quotient;
+            return;
+        }
+        // M4 < 2^63, so doubling p adds no carry to its top word.
+        if (quotient._l5 < (top << 1))
+        {
+            ReduceArm64(out result, quotient._l0, quotient._l1, quotient._l2,
+                quotient._l3, quotient._l4, quotient._l5);
+            return;
+        }
+        ReduceWideCorrectArm64(out result, quotient);
+    }
+
+    // For |value|<pR, adding pR to a negative input makes it nonnegative
+    // and below pR. Normalize the high half before the multiplication rows:
+    // its sign is already available, so this carry chain need not wait for
+    // the quotient's high word. Only the ordinary final p subtraction remains.
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void ReduceWideSmallArm64(out Fp result, in FpWide value)
+    {
+        ref ulong m = ref MemoryMarshal.GetArrayDataReference(ModulusLimbs);
+        ulong m0 = m, m1 = Unsafe.Add(ref m, 1), m2 = Unsafe.Add(ref m, 2);
+        ulong m3 = Unsafe.Add(ref m, 3), m4 = Unsafe.Add(ref m, 4), m5 = Unsafe.Add(ref m, 5);
+        ulong mask = 0UL - (value.L11 >> 63), carry = 0;
+        ulong h0 = AddCarry(value.L6, m0 & mask, ref carry);
+        ulong h1 = AddCarry(value.L7, m1 & mask, ref carry);
+        ulong h2 = AddCarry(value.L8, m2 & mask, ref carry);
+        ulong h3 = AddCarry(value.L9, m3 & mask, ref carry);
+        ulong h4 = AddCarry(value.L10, m4 & mask, ref carry);
+        ulong h5 = AddCarry(value.L11, m5 & mask, ref carry);
+        ulong t0 = value.L0, t1 = value.L1, t2 = value.L2;
+        ulong t3 = value.L3, t4 = value.L4, t5 = value.L5;
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
+        carry = 0;
+        h0 = AddCarry(t0, h0, ref carry); h1 = AddCarry(t1, h1, ref carry);
+        h2 = AddCarry(t2, h2, ref carry); h3 = AddCarry(t3, h3, ref carry);
+        h4 = AddCarry(t4, h4, ref carry); h5 = AddCarry(t5, h5, ref carry);
+        ReduceArm64(out result, h0, h1, h2, h3, h4, h5, m0, m1, m2, m3, m4, m5);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ReduceStepArm64(ulong m0, ulong m1, ulong m2, ulong m3, ulong m4, ulong m5,
         ref ulong t0, ref ulong t1, ref ulong t2, ref ulong t3, ref ulong t4, ref ulong t5)

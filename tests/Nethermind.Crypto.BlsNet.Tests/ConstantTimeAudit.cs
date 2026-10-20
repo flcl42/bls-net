@@ -35,6 +35,7 @@ internal static class ConstantTimeAudit
         // Its portable high-half fallback is checked by the kernel tests.
         Fp.MultiplyArm64(out ar, ar, a);
         Fp.MultiplyWide(out FpWide firstProduct, a, a);
+        ExerciseSmallReducerArm64(out ar, firstProduct);
         Fp.AddWide(out FpWide productSum, firstProduct, firstProduct);
         Fp.ReduceWideImaginaryArm64(out ar, productSum, firstProduct, default);
         Fp.InverseConstantTime(out ar, ar);
@@ -78,4 +79,8 @@ internal static class ConstantTimeAudit
         mask ^= G2Affine.EqualMask(qa, qa2) ^ G2Affine.IsInfinityMask(qa);
         witness = mask;
     }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void ExerciseSmallReducerArm64(out Fp result, in FpWide value) =>
+        Fp.ReduceWideSmallArm64(out result, value);
 }

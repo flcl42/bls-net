@@ -344,6 +344,11 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     private static void ReduceWideExpanded(out Fp result, in FpWide value)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            ReduceWideVariableArm64(out result, value);
+            return;
+        }
         ReduceWideCore(out Fp quotient, value);
         ReduceWideCorrect(out result, quotient);
     }
@@ -404,6 +409,11 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     private static void ReduceWideSmallExpanded(out Fp result, in FpWide value)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            ReduceWideSmallArm64(out result, value);
+            return;
+        }
         ReduceWideCore(out Fp quotient, value);
         ReduceWideSmallCorrect(out result, quotient);
     }

@@ -36,6 +36,15 @@ internal static unsafe partial class TowerTests
         Check(Raw(result) < P && Raw(result) == Mod(expected), label);
     }
 
+    // Keep each candidate in the same isolated optimized context as its production leaf.
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void ReduceVariableArm64ForTest(out Fp result, in FpWide value) =>
+        Fp.ReduceWideVariableArm64(out result, value);
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    private static void ReduceSmallArm64ForTest(out Fp result, in FpWide value) =>
+        Fp.ReduceWideSmallArm64(out result, value);
+
     private static void KernelTests()
     {
         RInverse = BigInteger.ModPow(R % P, P - 2, P);
@@ -50,6 +59,8 @@ internal static unsafe partial class TowerTests
             FpWide x = Wide(edge);
             Fp.ReduceWide(out Fp reduced, x);
             CheckReduced(reduced, edge * RInverse, "wide reducer signed bound edge");
+            ReduceVariableArm64ForTest(out reduced, x);
+            CheckReduced(reduced, edge * RInverse, "ARM64 variable reducer signed bound edge");
             FpWide aliasWide = x;
             Fp.ReduceWide(out Unsafe.As<FpWide, Fp>(ref aliasWide), aliasWide);
             CheckReduced(Unsafe.As<FpWide, Fp>(ref aliasWide), edge * RInverse, "wide reducer overlapping output");
@@ -57,6 +68,8 @@ internal static unsafe partial class TowerTests
             {
                 Fp.ReduceWideSmall(out reduced, x);
                 CheckReduced(reduced, edge * RInverse, "small reducer signed bound edge");
+                ReduceSmallArm64ForTest(out reduced, x);
+                CheckReduced(reduced, edge * RInverse, "ARM64 input-normalized small reducer edge");
                 TestWideDifference(x, default, edge);
                 if (edge.Sign >= 0)
                 {
@@ -72,6 +85,21 @@ internal static unsafe partial class TowerTests
                     CheckReduced(Unsafe.As<FpWide, Fp>(ref aliasWide), edge * RInverse, "positive reducer overlapping output");
                 }
             }
+        }
+        BigInteger pTop = (P >> 320) << 320, twicePTop = ((2 * P) >> 320) << 320;
+        foreach (BigInteger quotient in new BigInteger[]
+        {
+            -3 * P + 1, -P, -1, 0, 1, P - 1, P, P + 1, 2 * P - 1, 2 * P, 2 * P + 1, 3 * P - 1,
+            pTop - 1, pTop, pTop + 1, twicePTop - 1, twicePTop, twicePTop + 1,
+        })
+        {
+            // A zero low half makes the unreduced REDC quotient exact, so
+            // these exercise both sides and equality at each high-word guard.
+            FpWide input = Wide(quotient * R);
+            ReduceVariableArm64ForTest(out Fp reduced, input);
+            CheckReduced(reduced, quotient, "ARM64 variable reducer quotient guard");
+            ReduceVariableArm64ForTest(out Unsafe.As<FpWide, Fp>(ref input), input);
+            CheckReduced(Unsafe.As<FpWide, Fp>(ref input), quotient, "ARM64 variable reducer guard alias");
         }
         BigInteger[] rawEdges = [0, 1, 2, P / 2, P - 2, P - 1];
         foreach (BigInteger x in rawEdges) foreach (BigInteger y in rawEdges)
@@ -226,6 +254,13 @@ internal static unsafe partial class TowerTests
         Fp.MultiplyArm64(out armAlias, a, armAlias);
         Check(Fp.AreEqual(armAlias, armProduct), "ARM64 row product right alias");
         Fp.MultiplyWide(out FpWide wide, a, b); Check(Signed(wide) == x * y, "wide product vs BigInteger");
+        ReduceVariableArm64ForTest(out Fp directReduced, wide);
+        CheckReduced(directReduced, x * y * RInverse, "ARM64 variable reducer product");
+        ReduceSmallArm64ForTest(out directReduced, wide);
+        CheckReduced(directReduced, x * y * RInverse, "ARM64 input-normalized small reducer product");
+        FpWide signedProduct = Wide(x * y - y * y);
+        ReduceSmallArm64ForTest(out directReduced, signedProduct);
+        CheckReduced(directReduced, (x * y - y * y) * RInverse, "ARM64 input-normalized small reducer signed product");
         if (NativeAvailable && NativeKernelReference.Available)
         {
             NativeKernelReference.Multiply(out FpWide nativeWide, a, b);
