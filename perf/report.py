@@ -66,9 +66,13 @@ def main(out):
         lines += ['```text', (out / 'timings.txt').read_text().strip(), '```', '']
     executions = [json.loads(line) for line in (out / 'executions.jsonl').read_text().splitlines()]
     jit = [item for item in executions if item['name'].startswith('jit-')]
-    if len(jit) != 20 or any(item['exit_code'] != item['expected'] for item in executions):
+    required = {f'jit-{config}-tier{tiering}-{mode}'
+                for config in ('Release', 'Checked') for tiering in ('0', '1')
+                for mode in ('default', 'stress1', 'stress2', 'regs1', 'regs3', 'regs8')}
+    if (len(jit) != len(required) or {item['name'] for item in jit} != required or
+            any(item['exit_code'] != item['expected'] for item in executions)):
         raise RuntimeError('Incomplete or failed validation matrix')
-    lines += [f'JIT regression matrix: **{len(jit)}/20 passed** (Release + Checked, tiering 0/1, default/stress2/regs1/3/8).', '']
+    lines += [f'JIT regression matrix: **{len(jit)}/24 passed** (Release + Checked, tiering 0/1, default/stress1/stress2/regs1/3/8).', '']
     result = {}
     for policy in ('compact', 'expanded'):
         data = {host: [parse(out / f'bench-{host}-{policy}-{i + 1}.txt')

@@ -4,6 +4,22 @@ namespace Nethermind.Crypto.BlsNet.Arithmetic;
 
 internal static class Fp2Fused
 {
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void TripleAddDoubleArm64(out Fp2 result, in Fp2 t, in Fp2 a)
+    {
+        Fp.TripleAddDoubleArm64(out result.C0, t.C0, a.C0);
+        Fp.TripleAddDoubleArm64(out result.C1, t.C1, a.C1);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void TripleSubtractDoubleArm64(out Fp2 result, in Fp2 t, in Fp2 a)
+    {
+        Fp.TripleSubtractDoubleArm64(out result.C0, t.C0, a.C0);
+        Fp.TripleSubtractDoubleArm64(out result.C1, t.C1, a.C1);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Subtract(out Fp2 r, in Fp2 a, in Fp2 b)
     {

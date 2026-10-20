@@ -23,6 +23,9 @@ internal static class ConstantTimeAudit
         ulong mask = Fp.IsZeroMask(a);
         Fp12.SquareFp4Arm64(out Fp2 fp4Real, out Fp2 fp4Imaginary, b, b);
         mask ^= Fp2.EqualMask(fp4Real, fp4Imaginary);
+        Fp2Fused.TripleAddDoubleArm64(out Fp2 linear, b, b);
+        Fp2Fused.TripleSubtractDoubleArm64(out linear, linear, b);
+        mask ^= Fp2.EqualMask(linear, b);
         Fr secret = Fr.FromLittleEndianConstantTime(scalar); secret.ToLittleEndianConstantTime(scalar);
         Fp.Add(out Fp ar, a, a); Fp.Subtract(out ar, ar, a);
         Fp.Negate(out ar, ar); Fp.Multiply(out ar, ar, a); Fp.Square(out ar, ar);

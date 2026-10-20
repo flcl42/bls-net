@@ -42,7 +42,9 @@ G1 MSM 128,6000.000,3000.000
                 'library_commit': 'def', 'settings': {'BENCH_REPETITIONS': '3'}}))
             (out / 'machine.json').write_text(json.dumps({'affinity': [2, 3]}))
             (out / 'executions.jsonl').write_text('\n'.join(json.dumps({
-                'name': f'jit-{i}', 'exit_code': 100, 'expected': 100}) for i in range(20)))
+                'name': f'jit-{config}-tier{tiering}-{mode}', 'exit_code': 100, 'expected': 100})
+                for config in ('Release', 'Checked') for tiering in ('0', '1')
+                for mode in ('default', 'stress1', 'stress2', 'regs1', 'regs3', 'regs8')))
             for policy in ('compact', 'expanded'):
                 for host, times in (('patched', [(2, 1), (99, 3), (4, 2)]),
                                     ('stock', [(6, 4), (100, 2), (8, 6)])):
@@ -61,6 +63,18 @@ G1 MSM 128,6000.000,3000.000
             with contextlib.redirect_stdout(io.StringIO()):
                 report.main(out)
             self.assertIn('CPU affinity: **unpinned**', (out / 'summary.md').read_text(encoding='utf-8'))
+            execution_file = out / 'executions.jsonl'
+            original = execution_file.read_text()
+            records = [json.loads(line) for line in original.splitlines()]
+            # A full count with a duplicated name must not hide a missing mode.
+            records[1]['name'] = records[0]['name']
+            execution_file.write_text('\n'.join(json.dumps(record) for record in records))
+            with self.assertRaisesRegex(RuntimeError, 'Incomplete or failed validation matrix'):
+                report.main(out)
+            execution_file.write_text('\n'.join(original.splitlines()[:-1]))
+            with self.assertRaisesRegex(RuntimeError, 'Incomplete or failed validation matrix'):
+                report.main(out)
+            execution_file.write_text(original)
             (out / 'bench-stock-expanded-3.txt').write_text('')
             with self.assertRaisesRegex(RuntimeError, 'Missing or mismatched'):
                 report.main(out)

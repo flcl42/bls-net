@@ -85,7 +85,8 @@ directory is compiled with a minimal Fact shim and reflection runner, including
 new branch-local tests. Return 100 (or 0) means a passing test; the runner itself
 returns 100 only with at least one passing test and no failures. Unsupported test
 APIs or return types fail visibly rather than being skipped. Release and Checked
-JITs each run tiering 0/1 crossed with default, JitStress=2, JitStressRegs=1/3/8.
+JITs each run tiering 0/1 crossed with default, JitStress=1/2, JitStressRegs=1/3/8
+(24 named configurations). Reporting rejects missing or duplicate configurations.
 
 Each host/policy first runs a full `--quick` sweep, followed by the filtered
 repetitions, alternating host order. Linux processes are pinned with `taskset` to

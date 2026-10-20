@@ -242,6 +242,8 @@ The next map candidate shares the improved cross-product square core, retains la
 
 ### ARM64 generated code
 
+The next checkpoint pins runtime `a0c28efc` and requires 31 JIT fixtures in all 24 Release/Checked configurations, including JitStress=1. It also measures fused ARM64 cyclotomic coordinate updates (3t±2a), including compressed square runs. Local suites pass 8,418,524 checks per policy on patched x64 and stock .NET 10/11. The ARM64 audit inventories 162 methods with no variable-latency candidates. Hardware results are pending; no improvement is claimed yet. The optional native raw-product/reduction leaf imports now suppress the GC transition, matching the short reference kernels' intended measurement contract; compare their timings with native medians captured in the same run.
+
 Local Windows-ABI ARM64 AltJit captures compare the original library/runtime with the ARM64 kernels and runtime `00403488`. Counts include fixed loop repetitions, managed/native wrappers and symbolically resolved arithmetic callees. blst counts use its generated ELF ARMv8 assembly, including bare returns; ABI and scheduling differences remain. The dedicated inverse row counts one loop step, not a complete batch or inversion.
 
 | Kernel | Original managed, runtime 74ed6106 | ARM64 candidate | blst ARM64 |

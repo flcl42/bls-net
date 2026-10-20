@@ -167,6 +167,18 @@ internal static unsafe partial class TowerTests
         Fp positiveQuotient = RawField(x + P);
         Fp.ReduceWideSmallCorrectArm64(out corrected, positiveQuotient);
         CheckReduced(corrected, x, "ARM64 positive small correction");
+        Fp.TripleAddDoubleArm64(out corrected, a, b);
+        CheckReduced(corrected, 3 * x + 2 * y, "ARM64 triple plus double");
+        Fp linearAlias = a; Fp.TripleAddDoubleArm64(out linearAlias, linearAlias, b);
+        Check(Fp.AreEqual(linearAlias, corrected), "ARM64 triple plus double first alias");
+        linearAlias = b; Fp.TripleAddDoubleArm64(out linearAlias, a, linearAlias);
+        Check(Fp.AreEqual(linearAlias, corrected), "ARM64 triple plus double second alias");
+        Fp.TripleSubtractDoubleArm64(out corrected, a, b);
+        CheckReduced(corrected, 3 * x - 2 * y, "ARM64 triple minus double");
+        linearAlias = a; Fp.TripleSubtractDoubleArm64(out linearAlias, linearAlias, b);
+        Check(Fp.AreEqual(linearAlias, corrected), "ARM64 triple minus double first alias");
+        linearAlias = b; Fp.TripleSubtractDoubleArm64(out linearAlias, a, linearAlias);
+        Check(Fp.AreEqual(linearAlias, corrected), "ARM64 triple minus double second alias");
         BigInteger inverse31 = (RInverse << 353) % P;
         long f31 = (long)(x & 0x7fffffff), g31 = (1L << 31) - f31;
         foreach ((long f, long g) in new (long, long)[] { (f31, g31), (f31, -g31), (-f31, g31), (-f31, -g31), (1L << 31, 0), (0, -(1L << 31)) })

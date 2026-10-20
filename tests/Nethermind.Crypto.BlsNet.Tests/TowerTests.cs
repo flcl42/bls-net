@@ -161,6 +161,8 @@ internal static unsafe partial class TowerTests
             alias = a; Fp12.Square(out alias, alias); Equal(alias, n, "square alias");
             Fp12.CyclotomicSquare(out r, a); Native.blst_fp12_cyclotomic_sqr(out n, a); Equal(r, n, "cyclotomic formula on arbitrary input");
             alias = a; Fp12.CyclotomicSquare(out alias, alias); Equal(alias, n, "cyclotomic alias");
+            Fp12.CyclotomicSquareArm64(out r, a); Equal(r, n, "ARM64 fused cyclotomic formula");
+            alias = a; Fp12.CyclotomicSquareArm64(out alias, alias); Equal(alias, n, "ARM64 fused cyclotomic alias");
             Fp12.Inverse(out r, a); Native.blst_fp12_inverse(out n, a); Equal(r, n, "Fp12 inverse");
             alias = a; Fp12.Inverse(out alias, alias); Equal(alias, n, "Fp12 inverse alias");
             Fp12.Multiply(out r, a, r); Check(r.IsOne, "Fp12 inverse product");

@@ -78,7 +78,8 @@ def test():
         install_jit(config)
         for tiering in ('0', '1'):
             for stress, settings in (
-                ('default', {}), ('stress2', {'DOTNET_JitStress': '2'}),
+                ('default', {}), ('stress1', {'DOTNET_JitStress': '1'}),
+                ('stress2', {'DOTNET_JitStress': '2'}),
                 ('regs1', {'DOTNET_JitStressRegs': '1'}),
                 ('regs3', {'DOTNET_JitStressRegs': '3'}),
                 ('regs8', {'DOTNET_JitStressRegs': '8'})):

@@ -35,7 +35,7 @@ Multiplication uses two-row CIOS with final conditional reduction. Negation expr
 | Fp6 | Fp2[v]/(v³-(1+u)) | C0+C1v+C2v² | 288 |
 | Fp12 | Fp6[w]/(w²-v) | C0+C1w | 576 |
 
-Fp6 sparse helpers multiply by v, 0+yv or x+yv; `MultiplyByXY0` ignores the second input's C2. Fp12 sparse products pack coefficients into positions 0,1,4. Frobenius maps support powers 1–3. CyclotomicSquare matches blst's formula on arbitrary inputs, but equals ordinary square only in the cyclotomic subgroup.
+Fp6 sparse helpers multiply by v, 0+yv or x+yv; `MultiplyByXY0` ignores the second input's C2. Fp12 sparse products pack coefficients into positions 0,1,4. Frobenius maps support powers 1–3. CyclotomicSquare matches blst's formula on arbitrary inputs, but equals ordinary square only in the cyclotomic subgroup. The ARM64 candidate fuses each coordinate update as 3t±2a: 2(t+a)+t is below 5p<R and reduces by 4p, 2p and p; 2(t−a)+t lies in (−2p,3p) and uses the signed wide correction. All source coordinates precede overlapping output writes. The same helpers update the four retained coordinates in compressed square runs.
 
 ## Runtime kernel policy
 

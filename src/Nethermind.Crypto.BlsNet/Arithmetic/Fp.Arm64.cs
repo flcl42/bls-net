@@ -65,6 +65,49 @@ public readonly partial struct Fp
         SubtractWideInline(out first, first, second);
     }
 
+    // Canonical inputs. The shift replaces a whole-vector doubling carry
+    // chain: 3*t+2*a = 2*(t+a)+t, and 5p<R prevents overflow.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void TripleAddDoubleArm64(out Fp result, in Fp t, in Fp a)
+    {
+        ulong carry = 0;
+        ulong s0 = AddCarry(t._l0, a._l0, ref carry), s1 = AddCarry(t._l1, a._l1, ref carry);
+        ulong s2 = AddCarry(t._l2, a._l2, ref carry), s3 = AddCarry(t._l3, a._l3, ref carry);
+        ulong s4 = AddCarry(t._l4, a._l4, ref carry), s5 = AddCarry(t._l5, a._l5, ref carry);
+        carry = 0;
+        ulong h0 = AddCarry(t._l0, s0 << 1, ref carry);
+        ulong h1 = AddCarry(t._l1, (s1 << 1) | (s0 >> 63), ref carry);
+        ulong h2 = AddCarry(t._l2, (s2 << 1) | (s1 >> 63), ref carry);
+        ulong h3 = AddCarry(t._l3, (s3 << 1) | (s2 >> 63), ref carry);
+        ulong h4 = AddCarry(t._l4, (s4 << 1) | (s3 >> 63), ref carry);
+        ulong h5 = AddCarry(t._l5, (s5 << 1) | (s4 >> 63), ref carry);
+        ref ulong c = ref MemoryMarshal.GetArrayDataReference(Arm64WideCorrection.Limbs);
+        ReduceArm64(out Fp reduced, h0, h1, h2, h3, h4, h5,
+            c, Unsafe.Add(ref c, 1), Unsafe.Add(ref c, 2), Unsafe.Add(ref c, 3), Unsafe.Add(ref c, 4), Unsafe.Add(ref c, 5));
+        ReduceArm64(out reduced, reduced._l0, reduced._l1, reduced._l2, reduced._l3, reduced._l4, reduced._l5,
+            Unsafe.Add(ref c, 6), Unsafe.Add(ref c, 7), Unsafe.Add(ref c, 8), Unsafe.Add(ref c, 9), Unsafe.Add(ref c, 10), Unsafe.Add(ref c, 11));
+        ReduceArm64(out result, reduced._l0, reduced._l1, reduced._l2, reduced._l3, reduced._l4, reduced._l5);
+    }
+
+    // 3*t-2*a = 2*(t-a)+t lies in (-2p,3p), inside the full signed
+    // correction's (-3p,4p) contract. All original inputs precede output.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void TripleSubtractDoubleArm64(out Fp result, in Fp t, in Fp a)
+    {
+        ulong borrow = 0;
+        ulong s0 = SubBorrow(t._l0, a._l0, ref borrow), s1 = SubBorrow(t._l1, a._l1, ref borrow);
+        ulong s2 = SubBorrow(t._l2, a._l2, ref borrow), s3 = SubBorrow(t._l3, a._l3, ref borrow);
+        ulong s4 = SubBorrow(t._l4, a._l4, ref borrow), s5 = SubBorrow(t._l5, a._l5, ref borrow);
+        ulong carry = 0;
+        ulong h0 = AddCarry(t._l0, s0 << 1, ref carry);
+        ulong h1 = AddCarry(t._l1, (s1 << 1) | (s0 >> 63), ref carry);
+        ulong h2 = AddCarry(t._l2, (s2 << 1) | (s1 >> 63), ref carry);
+        ulong h3 = AddCarry(t._l3, (s3 << 1) | (s2 >> 63), ref carry);
+        ulong h4 = AddCarry(t._l4, (s4 << 1) | (s3 >> 63), ref carry);
+        ulong h5 = AddCarry(t._l5, (s5 << 1) | (s4 >> 63), ref carry);
+        ReduceWideCorrectArm64(out result, new Fp(h0, h1, h2, h3, h4, h5));
+    }
+
     // An isolated leaf preserves carry/select recognition when the caller has
     // a loop or another large inlined arithmetic body. Both policies share it.
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
