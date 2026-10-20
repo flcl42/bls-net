@@ -69,7 +69,7 @@ internal static unsafe partial class TowerTests
                 Fp.ReduceWideSmall(out reduced, x);
                 CheckReduced(reduced, edge * RInverse, "small reducer signed bound edge");
                 ReduceSmallArm64ForTest(out reduced, x);
-                CheckReduced(reduced, edge * RInverse, "ARM64 input-normalized small reducer edge");
+                CheckReduced(reduced, edge * RInverse, "ARM64 signed small reducer edge");
                 TestWideDifference(x, default, edge);
                 if (edge.Sign >= 0)
                 {
@@ -257,10 +257,10 @@ internal static unsafe partial class TowerTests
         ReduceVariableArm64ForTest(out Fp directReduced, wide);
         CheckReduced(directReduced, x * y * RInverse, "ARM64 variable reducer product");
         ReduceSmallArm64ForTest(out directReduced, wide);
-        CheckReduced(directReduced, x * y * RInverse, "ARM64 input-normalized small reducer product");
+        CheckReduced(directReduced, x * y * RInverse, "ARM64 signed small reducer product");
         FpWide signedProduct = Wide(x * y - y * y);
         ReduceSmallArm64ForTest(out directReduced, signedProduct);
-        CheckReduced(directReduced, (x * y - y * y) * RInverse, "ARM64 input-normalized small reducer signed product");
+        CheckReduced(directReduced, (x * y - y * y) * RInverse, "ARM64 signed small reducer signed product");
         if (NativeAvailable && NativeKernelReference.Available)
         {
             NativeKernelReference.Multiply(out FpWide nativeWide, a, b);

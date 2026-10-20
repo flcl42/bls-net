@@ -399,38 +399,33 @@ public readonly partial struct Fp
         ReduceWideCorrectArm64(out result, quotient);
     }
 
-    // For |value|<pR, adding pR to a negative input makes it nonnegative
-    // and below pR. Normalize the high half between the low-half row groups:
-    // its sign is already available, so this carry chain can overlap the
-    // multiply work instead of waiting for the quotient's high word.
-    // Only the ordinary final p subtraction remains.
+    // |value|<pR gives q in (-p,2p). Form q+p and q-p independently:
+    // unsigned borrow selects q or q-p for nonnegative q; a separate sign
+    // select chooses q+p for negative q. Both carry chains can start from
+    // low words before the final quotient sign is ready.
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void ReduceWideSmallArm64(out Fp result, in FpWide value)
     {
+        ReduceWideCoreArm64(out Fp q, value);
         ref ulong m = ref MemoryMarshal.GetArrayDataReference(ModulusLimbs);
         ulong m0 = m, m1 = Unsafe.Add(ref m, 1), m2 = Unsafe.Add(ref m, 2);
         ulong m3 = Unsafe.Add(ref m, 3), m4 = Unsafe.Add(ref m, 4), m5 = Unsafe.Add(ref m, 5);
-        ulong t0 = value.L0, t1 = value.L1, t2 = value.L2;
-        ulong t3 = value.L3, t4 = value.L4, t5 = value.L5;
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
-        ulong mask = 0UL - (value.L11 >> 63), carry = 0;
-        ulong h0 = AddCarry(value.L6, m0 & mask, ref carry);
-        ulong h1 = AddCarry(value.L7, m1 & mask, ref carry);
-        ulong h2 = AddCarry(value.L8, m2 & mask, ref carry);
-        ulong h3 = AddCarry(value.L9, m3 & mask, ref carry);
-        ulong h4 = AddCarry(value.L10, m4 & mask, ref carry);
-        ulong h5 = AddCarry(value.L11, m5 & mask, ref carry);
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
-        carry = 0;
-        h0 = AddCarry(t0, h0, ref carry); h1 = AddCarry(t1, h1, ref carry);
-        h2 = AddCarry(t2, h2, ref carry); h3 = AddCarry(t3, h3, ref carry);
-        h4 = AddCarry(t4, h4, ref carry); h5 = AddCarry(t5, h5, ref carry);
-        ReduceArm64(out result, h0, h1, h2, h3, h4, h5, m0, m1, m2, m3, m4, m5);
+        ulong carry = 0;
+        ulong p0 = AddCarry(q._l0, m0, ref carry), p1 = AddCarry(q._l1, m1, ref carry);
+        ulong p2 = AddCarry(q._l2, m2, ref carry), p3 = AddCarry(q._l3, m3, ref carry);
+        ulong p4 = AddCarry(q._l4, m4, ref carry), p5 = AddCarry(q._l5, m5, ref carry);
+        ulong borrow = 0;
+        ulong d0 = SubBorrow(q._l0, m0, ref borrow), d1 = SubBorrow(q._l1, m1, ref borrow);
+        ulong d2 = SubBorrow(q._l2, m2, ref borrow), d3 = SubBorrow(q._l3, m3, ref borrow);
+        ulong d4 = SubBorrow(q._l4, m4, ref borrow), d5 = SubBorrow(q._l5, m5, ref borrow);
+        ulong mask = ChoiceToMask(borrow);
+        d0 = Select(q._l0, d0, mask); d1 = Select(q._l1, d1, mask);
+        d2 = Select(q._l2, d2, mask); d3 = Select(q._l3, d3, mask);
+        d4 = Select(q._l4, d4, mask); d5 = Select(q._l5, d5, mask);
+        mask = 0UL - ((long)q._l5 < 0 ? 1UL : 0UL);
+        result = new Fp(Select(p0, d0, mask), Select(p1, d1, mask), Select(p2, d2, mask),
+            Select(p3, d3, mask), Select(p4, d4, mask), Select(p5, d5, mask));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
