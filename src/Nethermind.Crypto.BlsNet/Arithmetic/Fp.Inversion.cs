@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Nethermind.Crypto.BlsNet.Arithmetic;
 
@@ -51,8 +52,21 @@ public readonly partial struct Fp
                 aa >>= 1;
                 f1 <<= 1; g1 <<= 1;
             }
-            ApplyGcdMatrix(nextA, a, b, ref f0, ref g0, steps);
-            ApplyGcdMatrix(nextB, a, b, ref f1, ref g1, steps);
+            if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported && steps == 31)
+            {
+                // The fixed-width update already implements this exact signed
+                // matrix and sign correction. Reuse it for regular full batches
+                // to avoid the span loops and seven-word scratch in ApplyGcdMatrix.
+                ref Fp av = ref Unsafe.As<ulong, Fp>(ref MemoryMarshal.GetReference(a));
+                ref Fp bv = ref Unsafe.As<ulong, Fp>(ref MemoryMarshal.GetReference(b));
+                InverseUpdate(out Unsafe.As<ulong, Fp>(ref MemoryMarshal.GetReference(nextA)), av, bv, ref f0, ref g0);
+                InverseUpdate(out Unsafe.As<ulong, Fp>(ref MemoryMarshal.GetReference(nextB)), av, bv, ref f1, ref g1);
+            }
+            else
+            {
+                ApplyGcdMatrix(nextA, a, b, ref f0, ref g0, steps);
+                ApplyGcdMatrix(nextB, a, b, ref f1, ref g1, steps);
+            }
             ApplyCoefficientMatrix(out Fp nextU, u, v, f0, g0, steps);
             ApplyCoefficientMatrix(out v, u, v, f1, g1, steps);
             u = nextU;

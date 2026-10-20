@@ -17,13 +17,21 @@ internal static class NativeBlstLoader
             if (required) throw new DllNotFoundException("Native blst is required for this run.");
             return false;
         }
-        NativeLibrary.SetDllImportResolver(typeof(NativeBlstLoader).Assembly, (name, _, _) => name is "blst" or "blst.dll" ? handle : 0);
+        TryLoad(out nint kernels, kernelReference: true);
+        NativeKernelReference.Available = kernels != 0;
+        NativeLibrary.SetDllImportResolver(typeof(NativeBlstLoader).Assembly, (name, _, _) => name switch
+        {
+            "blst" or "blst.dll" => handle,
+            "blst-kernels" => kernels,
+            _ => 0,
+        });
         return true;
     }
 
-    private static bool TryLoad(out nint handle)
+    private static bool TryLoad(out nint handle, bool kernelReference = false)
     {
-        string fileName = OperatingSystem.IsWindows() ? "blst.dll" : OperatingSystem.IsMacOS() ? "libblst.dylib" : "libblst.so";
+        string stem = kernelReference ? "blst-kernels" : "blst";
+        string fileName = OperatingSystem.IsWindows() ? stem + ".dll" : OperatingSystem.IsMacOS() ? "lib" + stem + ".dylib" : "lib" + stem + ".so";
         for (DirectoryInfo? directory = new(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
             string path = Path.Combine(directory.FullName, "artifacts", "native", fileName);
@@ -40,6 +48,7 @@ internal static class NativeBlstLoader
             }
         }
         handle = 0;
+        if (kernelReference) return false;
         string script = OperatingSystem.IsWindows() ? "scripts/build-native-blst.ps1" : "sh scripts/build-native-blst.sh";
         Console.WriteLine($"SKIP: native blst comparisons ({RuntimeInformation.ProcessArchitecture}); build artifacts/native/{fileName} with {script}. Managed checks and benchmarks still run.");
         return false;

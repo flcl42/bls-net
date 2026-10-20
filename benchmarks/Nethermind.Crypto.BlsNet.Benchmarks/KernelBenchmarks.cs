@@ -24,7 +24,9 @@ internal static unsafe partial class TowerBenchmarks
             int count = op == 4 ? 30000 : 1000000;
             if (BenchmarkOptions.Quick) count /= 10;
             double managed = MeasureKernel(op, false, count, a, b, x, y, out long allocated);
-            double native = NativeAvailable && (op < 5 || op is 12 or 14 or 15 or 16 or 19 or 20 or 21 or 22 or 23) ? MeasureKernel(op, true, count, a, b, x, y, out _) : double.NaN;
+            bool hasReference = NativeAvailable && (op < 5 || op is 12 or 14 or 15 or 16 or 19 or 20 or 21 or 22 or 23 ||
+                NativeKernelReference.Available && op is 5 or 6 or 7 or 17 or 18 or 24);
+            double native = hasReference ? MeasureKernel(op, true, count, a, b, x, y, out _) : double.NaN;
             Console.WriteLine($"{names[op]} | {managed:F2} | {native:F2} | {allocated}");
         }
     }
@@ -61,6 +63,9 @@ internal static unsafe partial class TowerBenchmarks
                 case 2: for (int i = 0; i < count; i++) KernelNative.blst_fp2_mul(out r2, a, b); break;
                 case 3: for (int i = 0; i < count; i++) KernelNative.blst_fp2_sqr(out r2, a); break;
                 case 4: for (int i = 0; i < count; i++) KernelNative.blst_fp_inverse(out r, a.C0); break;
+                case 5: case 24: for (int i = 0; i < count; i++) NativeKernelReference.Multiply(out wide, a.C0, b.C0); break;
+                case 6: case 7: case 17: for (int i = 0; i < count; i++) NativeKernelReference.Reduce(out r, x); break;
+                case 18: for (int i = 0; i < count; i++) NativeKernelReference.SubtractReduce(out r, x, y); break;
                 case 12: for (int i = 0; i < count; i++) KernelNative.blst_fp_cneg(out r, a.C0, 1); break;
                 case 14: for (int i = 0; i < count; i++) KernelNative.blst_fp_add(out r, a.C0, b.C0); break;
                 case 15: for (int i = 0; i < count; i++) KernelNative.blst_fp_sub(out r, a.C0, b.C0); break;

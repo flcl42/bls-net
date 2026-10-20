@@ -60,6 +60,11 @@ internal static unsafe partial class TowerTests
                 TestWideDifference(x, default, edge);
                 if (edge.Sign >= 0)
                 {
+                    if (NativeAvailable && NativeKernelReference.Available)
+                    {
+                        NativeKernelReference.Reduce(out Fp nativeReduced, x);
+                        CheckReduced(nativeReduced, edge * RInverse, "native raw REDC boundary");
+                    }
                     Fp.ReduceWidePositive(out reduced, x);
                     CheckReduced(reduced, edge * RInverse, "positive reducer bound edge");
                     aliasWide = x;
@@ -162,6 +167,24 @@ internal static unsafe partial class TowerTests
         Fp positiveQuotient = RawField(x + P);
         Fp.ReduceWideSmallCorrectArm64(out corrected, positiveQuotient);
         CheckReduced(corrected, x, "ARM64 positive small correction");
+        BigInteger fullQuotient = 7 * x - 3 * P;
+        Fp signedQuotient = RawField(fullQuotient & (R - 1));
+        Fp.ReduceWideCorrectArm64(out corrected, signedQuotient);
+        CheckReduced(corrected, fullQuotient, "ARM64 full signed correction");
+        Fp.ReduceWideCorrectArm64(out signedQuotient, signedQuotient);
+        CheckReduced(signedQuotient, fullQuotient, "ARM64 full signed correction alias");
+        FpWide crossSum = Wide((x + y) * (x + y)), firstSquare = Wide(x * x), secondSquare = Wide(y * y);
+        Fp.ReduceWideImaginaryArm64(out corrected, crossSum, firstSquare, secondSquare);
+        CheckReduced(corrected, 2 * x * y * RInverse, "ARM64 fused imaginary reducer");
+        FpWide crossAlias = crossSum;
+        Fp.ReduceWideImaginaryArm64(out Unsafe.As<FpWide, Fp>(ref crossAlias), crossAlias, firstSquare, secondSquare);
+        CheckReduced(Unsafe.As<FpWide, Fp>(ref crossAlias), 2 * x * y * RInverse, "ARM64 fused imaginary sum alias");
+        crossAlias = firstSquare;
+        Fp.ReduceWideImaginaryArm64(out Unsafe.As<FpWide, Fp>(ref crossAlias), crossSum, crossAlias, secondSquare);
+        CheckReduced(Unsafe.As<FpWide, Fp>(ref crossAlias), 2 * x * y * RInverse, "ARM64 fused imaginary first alias");
+        crossAlias = secondSquare;
+        Fp.ReduceWideImaginaryArm64(out Unsafe.As<FpWide, Fp>(ref crossAlias), crossSum, firstSquare, crossAlias);
+        CheckReduced(Unsafe.As<FpWide, Fp>(ref crossAlias), 2 * x * y * RInverse, "ARM64 fused imaginary second alias");
         Fp.MultiplyArm64(out Fp armProduct, a, b);
         CheckReduced(armProduct, x * y * RInverse, "ARM64 row product vs BigInteger");
         Fp armAlias = a;
@@ -171,6 +194,16 @@ internal static unsafe partial class TowerTests
         Fp.MultiplyArm64(out armAlias, a, armAlias);
         Check(Fp.AreEqual(armAlias, armProduct), "ARM64 row product right alias");
         Fp.MultiplyWide(out FpWide wide, a, b); Check(Signed(wide) == x * y, "wide product vs BigInteger");
+        if (NativeAvailable && NativeKernelReference.Available)
+        {
+            NativeKernelReference.Multiply(out FpWide nativeWide, a, b);
+            Check(Signed(nativeWide) == x * y, "native raw product wrapper");
+            NativeKernelReference.Reduce(out Fp nativeReduced, nativeWide);
+            CheckReduced(nativeReduced, x * y * RInverse, "native raw REDC wrapper");
+            FpWide other = Wide(y * y);
+            NativeKernelReference.SubtractReduce(out nativeReduced, nativeWide, other);
+            CheckReduced(nativeReduced, (x * y - y * y) * RInverse, "native subtract and REDC wrapper");
+        }
         Fp.MultiplyWideArm64(out FpWide armWide, a, b);
         Check(Signed(armWide) == x * y, "ARM64 wide product vs BigInteger");
         FpWide armProductAlias = default;

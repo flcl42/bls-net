@@ -56,7 +56,19 @@ Use net10.0 for stock .NET 10. The script sets/restores root, roll-forward, Read
 
 The initial portability captures below use stock .NET 10.0.12 and .NET 11.0.0-rc.1.26425.128 and precede the ARM64 arithmetic kernels. The [ARM64 follow-up](../jit/README.md#arm64-carry-and-row-follow-up) adds separate private-host AltJit captures with the patched runtime and current kernels. This is a manual control-flow/address review, not an independent security audit or a claim about physical ARM CPU latency.
 
-The current patched AltJit inventory covers 163 reachable methods, with no variable-latency candidates. The unrolled Fp multiply/square, disjoint raw product and positive wide reducer have no conditional branches. The 31-step inverse kernel uses three CSELs and its public backedge; the Fp inverse wrapper's nine branches count public batches/steps or clear its fixed stack-frame range. Addressed stack fields and loads/stores preserve NZCV without reordering accesses. Remaining unresolved helpers require capture on native ARM64; the x64 fallback can execute different helper boundaries. Run `scripts/audit-constant-time.ps1 -Arm64AltJit clrjit_universal_arm64_x64.dll -Dotnet <private-host>` for this local inventory, and omit `-Arm64AltJit` on the native ARM64 host.
+The patched AltJit inventory with runtime `c318f5ac` covers 156 reachable methods, with no variable-latency candidates. The unrolled Fp multiply/square, disjoint raw product, positive wide reducer and fused imaginary-product reducer have no conditional branches. The 31-step inverse kernel uses three CSELs and its public backedge; the Fp inverse wrapper's branches count public batches/steps or clear its fixed stack-frame range. Addressed stack fields and loads/stores preserve NZCV without reordering accesses. Remaining unresolved helpers require capture on native ARM64; the x64 fallback can execute different helper boundaries. Run `scripts/audit-constant-time.ps1 -Arm64AltJit clrjit_universal_arm64_x64.dll -Dotnet <private-host>` for this local inventory, and omit `-Arm64AltJit` on the native ARM64 host.
+
+Runtime `c318f5ac` also fixes two correctness-review findings in mask lowering: TEST comparisons must retain bit-test semantics, and newly inserted TEST/CMP nodes must not overwrite live carry/borrow flags. Rejected mask optimizations retain their branch-free bitwise implementation. The new regressions pass all ten x64 Checked stress/tiering configurations; extracted corrected ARM64 select and carry leaves pass 680,000 comparisons under QEMU. Native CLR stress results remain required before declaring the checkpoint verified on hardware. These changes preserve correctness and constant-time structure; constant-time operation speed is outside the optimization target.
+
+Real Neoverse-N2 listings from [run 39314252575](https://github.com/flcl42/bls-net/actions/runs/39314252575), runtime `8a918efe` and library `2441b94`, close the compiled Fp inverse, secret multiplication and constant-time map call graphs: **100 compiled methods, 14 runtime/helper boundaries, zero unresolved library callees and zero variable-latency candidates**. Manual review attributes conditional branches to fixed schedules, public lengths and polynomial degrees, public type/configuration initialization, stack probes/clearing and GC helpers. Indexed scalar accesses follow the public bit/window counters; point selection scans all sixteen entries. Field arithmetic kernels have no conditional branches. This capture does not cover the standalone Fr inverse or every secret API; retain the broader audit driver captures too.
+
+The inventory accepts repeated `--root` signature substrings to reproduce this review directly from the native benchmark artifact. It rejects a requested root absent from the listing. Comments naming generic methods are excluded from address operands.
+
+```powershell
+python scripts/list-constant-time-jumps.py disasm-patched-expanded.asm `
+  --root 'Fp:InverseConstantTime(' --root 'SecretMultiply' `
+  --root 'MapToG1:MapConstantTime(' --root 'MapToG2:MapConstantTime('
+```
 
 ### Cross-compilation
 
@@ -155,7 +167,7 @@ Both policies were re-audited on all three x64 hosts, tiering off/on. Production
 
 No new secret-dependent branch or address was found. The twelve patched tiered candidates remain public span-size and window-count divisions, as described above. All twelve full-suite host × policy × native-on/off combinations passed: 7,595,581 checks with native and 7,285,065 without, including the new 12/7 ABI/layout checks. Both framework builds remained warning-free.
 
-Real hardware execution/performance, macOS/Windows ARM64 runtime Tier1 review, and physical timing experiments remain open. Crossgen2 and QEMU do not establish processor timing behavior. Initial hosted CI results are also pending.
+Real Linux ARM64 execution/performance and an untiered native review are recorded above and in [performance](performance.md#arm64-hardware). macOS/Windows ARM64 runtime Tier1 review and physical leakage experiments remain open. Crossgen2 and QEMU do not establish processor timing behavior.
 
 ## Statistical timing experiment
 

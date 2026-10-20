@@ -2,14 +2,22 @@
 
 This is an inventory for manual data-flow review, not an automatic constant-time proof.
 Use --all-methods for R2R captures with unresolved relocation-based calls.
+Use repeated --root signature substrings for native benchmark captures without Exercise.
 """
+import argparse
 from pathlib import Path
 import re
 import sys
 
-path = Path(sys.argv[1])
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('listing', type=Path)
+selection = parser.add_mutually_exclusive_group()
+selection.add_argument('--all-methods', action='store_true')
+selection.add_argument('--root', action='append', default=[], help='Compiled root signature substring; repeat for multiple roots')
+options = parser.parse_args()
+path = options.listing
 text = path.read_text(encoding='utf-8-sig')
-all_methods = '--all-methods' in sys.argv[2:]
+all_methods = options.all_methods
 conditional = re.compile(r'^(?:j(?!mp\b)\w+|b\.[a-z]+|b(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)|cbn?z|tbn?z)\s', re.I)
 call = re.compile(r'^(?:(?:call|tail\.jmp|bl|blr|blraaz?|blrabz?|br|braaz?|brabz?)\s|b\s+(?=.*(?::|// code for)))', re.I)
 indirect = re.compile(r'^(?:ret(?:aa|ab)?(?:\s|$)|(?:blr|br|blraaz?|blrabz?|braaz?|brabz?)\s|(?:call|jmp|tail\.jmp)\s+(?:\[|[re][a-z0-9]+\b))', re.I)
@@ -27,7 +35,13 @@ for block in re.split(r'; Assembly listing for method ', text)[1:]:
     blocks[name] = block
     versions.setdefault(signature, []).append(name)
 
-roots = list(blocks) if all_methods else [name for name in blocks if name.startswith('ConstantTimeAudit:Exercise(')]
+if options.root:
+    for pattern in options.root:
+        if not any(pattern in name for name in blocks):
+            raise SystemExit(f'Missing compiled root: {pattern}')
+    roots = [name for name in blocks if any(pattern in name for pattern in options.root)]
+else:
+    roots = list(blocks) if all_methods else [name for name in blocks if name.startswith('ConstantTimeAudit:Exercise(')]
 if not roots:
     raise SystemExit('Missing audit Exercise method: check disassembly settings')
 visited, pending, external = set(), list(roots), set()
@@ -69,9 +83,10 @@ with (out / 'jumps.tsv').open('w') as jumps, (out / 'calls.tsv').open('w') as ca
                 calls.write(f'{name}\t{instruction}\n')
             if indirect.match(instruction):
                 branches.write(f'{name}\t{label}\t{instruction}\n')
-            if '[' in instruction and not instruction.startswith(';'):
+            address_instruction = instruction.split('//', 1)[0]
+            if '[' in address_instruction and not instruction.startswith(';'):
                 addresses.write(f'{name}\t{label}\t{instruction}\n')
-                if re.search(r'\[[^\]]*(?:,\s*[wx](?:\d+|ip[01])\b|\+\s*[re][a-z0-9]+\b|\*)', instruction, re.I):
+                if re.search(r'\[[^\]]*(?:,\s*[wx](?:\d+|ip[01])\b|\+\s*[re][a-z0-9]+\b|\*)', address_instruction, re.I):
                     indexed.write(f'{name}\t{label}\t{instruction}\n')
             if instruction and not instruction.startswith(';'):
                 previous = instruction

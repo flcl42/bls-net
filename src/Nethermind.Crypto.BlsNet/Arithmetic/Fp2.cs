@@ -120,6 +120,12 @@ public partial struct Fp2 : IEquatable<Fp2>, IField<Fp2>
         Fp.MultiplyWideNoAlias(out FpWide t0, left.C0, right.C0);
         Fp.MultiplyWideNoAlias(out FpWide t1, left.C1, right.C1);
         Fp.MultiplyWideNoAlias(out FpWide t2, sa, sb);
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            Fp.ReduceWideDifference(out result.C0, t0, t1);
+            Fp.ReduceWideImaginaryArm64(out result.C1, t2, t0, t1);
+            return;
+        }
         Fp.SubtractWideImaginary(ref t2, t0, t1);
         Fp.ReduceWideDifference(out result.C0, t0, t1);
         Fp.ReduceWidePositive(out result.C1, t2);

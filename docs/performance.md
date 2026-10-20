@@ -153,11 +153,38 @@ The cold runtime/testhost plus both JITs took 998 seconds. All library suites an
 
 This is an intermediate measurement, not a parity claim. Expanded Fp square's loop caller materializes carries despite the efficient isolated arithmetic listing. Fp2 multiply, Fr mul+add and the same-input variable inverse also need further measurements or improvements. The unfiltered quick sweep measures Fp12 square once at 1.548 µs versus blst's 1.544 µs; it needs repeated confirmation. Regular operations are the speed targets; constant-time paths remain correctness and generated-code security requirements. The paired constant-time inversion experiment is shelved locally and is not part of the branch.
 
-The next library candidate isolates ARM64 square, uses four-limb Fr carry rows, loads Fp subtraction's modulus, and reuses that modulus for signed small-wide correction. Local ARM64 counts are 302 for the square leaf, 204 for the Fr mul+add benchmark entry (previously 263), 43 for Fp subtraction (previously 56), and 244 for difference-plus-REDC (previously 265). Both policies pass 8,047,464 local native-comparison checks. All 171 common x64 library instruction listings remain identical to the original. Hardware validation of this follow-up is pending.
+### Isolated square and carry rows on hardware
+
+[Run 39319334072](https://github.com/flcl42/bls-net/actions/runs/39319334072) measures library `ec20417`, runtime `8a918efe`, three alternating repetitions per host/policy on Linux ARM64. Both policies pass 8,047,464 checks and all 23 JIT entry points pass in all twenty configurations. Values are **µs**, with native medians from the patched process. These runtime revisions precede the subsequent correctness-review fixes described in [jit/README.md](../jit/README.md); they are measurement checkpoints, not the final runtime recommendation.
+
+| Operation | Stock | Patched before | Patched ec20417 | blst | Patched/blst |
+|---|---:|---:|---:|---:|---:|
+| Fp multiply | 0.112 | 0.050 | 0.036 | 0.039 | 0.91x |
+| Fp square | 0.094 | 0.042 | 0.034 | 0.034 | 0.99x |
+| Fp2 multiply | 0.336 | 0.153 | 0.113 | 0.113 | 1.00x |
+| Fp2 square | 0.244 | 0.109 | 0.078 | 0.085 | 0.92x |
+| Fr mul+add | 0.058 | 0.029 | 0.021 | 0.024 | 0.88x |
+| Fp mul+add | 0.129 | 0.059 | 0.041 | 0.045 | 0.92x |
+| Fp inverse, same inputs | 3.493 | 3.064 | 2.904 | 2.857 | 1.02x |
+| Fp inverse, kernel | 3.343 | 2.946 | 2.799 | 2.855 | 0.98x |
+| Fp12 multiply | 6.034 | 2.992 | 2.139 | 2.156 | 0.99x |
+| Pairing check 2 | 2380.005 | 1167.972 | 821.095 | 853.603 | 0.96x |
+| G1 multiply | 196.989 | 100.259 | 69.404 | 89.043 | 0.78x |
+| G2 multiply | 369.356 | 174.549 | 126.537 | 183.158 | 0.69x |
+| G1 MSM 128 | 8083.327 | 4034.174 | 2864.050 | 3409.867 | 0.84x |
+| G2 MSM 128 | 14965.645 | 7326.774 | 5498.616 | 9167.597 | 0.60x |
+| map G1 | 116.794 | 58.226 | 43.918 | 44.798 | 0.98x |
+| map G2 | 445.423 | 211.078 | 155.095 | 160.471 | 0.97x |
+
+Isolating ARM64 square removes the caller's carry materialization. Four-limb Fr carry rows improve the mul+add loop. Loading Fp subtraction's modulus and reusing it for signed small-wide correction reduces subtraction to 43 instructions and difference-plus-REDC to 244. The square leaf has 302 instructions; the Fr loop entry has 204. All 171 common x64 library instruction listings remain identical to the original. Fp square, Fp2 multiply, the variable inverse, Fp12 multiply/square, maps and pairing still need stronger margins and repeated confirmation; a ratio near one is not a clear win.
+
+The next candidate reuses the existing signed 31-step update helper in the variable inverse, loads the full signed-wide correction constants, and fuses the imaginary Fp2 product subtraction with REDC. Its optional separate native reference library wraps the pinned assembly's raw product, REDC and subtract-plus-REDC without changing the public blst controls. Local differential checks cover Windows x64 and emulated ARM64; native Linux and Apple silicon measurements are pending. Constant-time inversion remains outside the speed target and its paired experiment remains shelved.
+
+At this checkpoint, stock .NET 10/11 and patched x64 pass 8,137,792 checks under each policy. Fresh x64 captures with runtime `c318f5ac` match all 171 common audit methods and all 147 common regular benchmark/library methods against the original library/runtime; relocation addresses and process stack cookies are normalized, arithmetic constants are retained. The regular capture includes variable inversion, full wide reduction and Fp12 multiply/square. Three alternating x64 quick captures show Fp12 multiply/square and pairing medians within 1.1%; individual kernel-loop samples fluctuate substantially, including an Fp2-square median 12% higher despite identical library instructions. These noisy harness samples do not establish a timing regression or a speed claim. The exact instruction comparisons provide the x64 preservation evidence. `RUN_MACOS=true` is set for native Apple silicon validation, and Fp12 square/raw-product/reduction names are appended to the repeated filter. The native-wrapper workflow build hook awaits authorization under the pipeline ownership rule.
 
 ### ARM64 generated code
 
-Local Windows-ABI ARM64 AltJit captures compare the original library/runtime with the ARM64 kernels and runtime `8a918efe`. Counts include fixed loop repetitions, managed/native wrappers and symbolically resolved arithmetic callees. blst counts use its generated ELF ARMv8 assembly, including bare returns; ABI and scheduling differences remain. The dedicated inverse row counts one loop step, not a complete batch or inversion.
+Local Windows-ABI ARM64 AltJit captures compare the original library/runtime with the ARM64 kernels and runtime `c318f5ac`. Counts include fixed loop repetitions, managed/native wrappers and symbolically resolved arithmetic callees. blst counts use its generated ELF ARMv8 assembly, including bare returns; ABI and scheduling differences remain. The dedicated inverse row counts one loop step, not a complete batch or inversion.
 
 | Kernel | Original managed, runtime 74ed6106 | ARM64 candidate | blst ARM64 |
 |---|---:|---:|---:|
@@ -166,15 +193,15 @@ Local Windows-ABI ARM64 AltJit captures compare the original library/runtime wit
 | Fp raw product | 217 | 165 | 180 |
 | Fp raw product, preserving aliases | 223 | 166 | 180 |
 | Fp positive wide reduction | 341 | 200 | 204 |
-| Fp2 multiply | 1664 | 1159 | 1095 |
+| Fp2 multiply | 1664 | 1085 | 1095 |
 | Fp2 square | 1178 | 810 | 801 |
 | Fp add | 90 | 43 | 45 |
-| Fp subtract | 93 | 56 | 44 |
+| Fp subtract | 93 | 43 | 44 |
 | Inverse inner step | 34 | 18 | 27 |
 
-Fp multiply's isolated arithmetic leaf is 347 branch-free instructions; its managed entry adds nine. The raw product and wide reducer are also branch-free. The inverse uses three CSELs and only its public backedge per step. Managed retains 31-bit batches; blst ARM64 uses 62-bit batches. [JIT reproduction](../jit/README.md#arm64-carry-and-row-follow-up) describes the private-host CoreLib preparation needed for accurate widening-product imports.
+Fp multiply's isolated arithmetic leaf is 347 branch-free instructions; its managed entry adds nine. The raw product and wide reducer are also branch-free. Fp2 multiplication totals 93 wrapper instructions, three 165-instruction products, 244 for the real difference/reduction and 253 for the fused imaginary reduction. The inverse uses three CSELs and only its public backedge per step. Managed retains 31-bit batches; blst ARM64 uses 62-bit batches. [JIT reproduction](../jit/README.md#arm64-carry-and-row-follow-up) describes the private-host CoreLib preparation needed for accurate widening-product imports.
 
-The ARM64 audit inventory covers 163 reachable methods and reports no variable-latency candidates. It retains unresolved helpers requiring native ARM64 closure. Reviewed field-kernel branches are absent; inversion branches count fixed batches/steps or clear a public stack-frame range. The capture is generated-code review, not hardware execution.
+The ARM64 audit inventory covers 156 reachable methods and reports no variable-latency candidates. It retains unresolved helpers requiring native ARM64 closure. Reviewed field-kernel branches are absent; inversion branches count fixed batches/steps or clear a public stack-frame range. The capture is generated-code review, not hardware execution.
 
 ### x64 regression check for the ARM64 candidate
 

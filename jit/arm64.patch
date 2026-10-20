@@ -1,5 +1,5 @@
 diff --git a/src/coreclr/jit/lower.cpp b/src/coreclr/jit/lower.cpp
-index bac51326..a01c8c4b 100644
+index bac51326..43ddd58d 100644
 --- a/src/coreclr/jit/lower.cpp
 +++ b/src/coreclr/jit/lower.cpp
 @@ -9818,16 +9818,15 @@ void Lowering::AfterLowerBlocks()
@@ -39,7 +39,7 @@ index bac51326..a01c8c4b 100644
 +        bool fromRelop = false;
 +#ifdef TARGET_ARM64
 +        // Ordinary integer comparisons can feed CSEL directly too. The
-+        // comparison remains at its original evaluation point as a CMP.
++        // comparison remains at its original evaluation point as a CMP or TEST.
 +        fromRelop = canUseCC && value->OperIsCompare() && value->gtGetOp1()->TypeIs(TYP_INT, TYP_LONG);
 +#endif
 +        canUseCC = canUseCC &&
@@ -62,14 +62,29 @@ index bac51326..a01c8c4b 100644
  
          // Every read of the mask value must be a select t ^ ((t ^ s) & mask).
          selects.clear();
-@@ -15372,6 +15382,19 @@ bool Lowering::TryLowerMaskSelect()
+@@ -15372,6 +15382,34 @@ bool Lowering::TryLowerMaskSelect()
              continue;
          }
  
 +#ifdef TARGET_ARM64
++        // Carry forwarding and multiply-row lowering have already run. A new
++        // CMP/TEST must not overwrite flags that their consumers still need.
++        bool flagsLive = fromRelop && AreFlagsLiveBefore(cc);
++        if (testBit)
++        {
++            for (const Select& select : selects)
++            {
++                flagsLive |= AreFlagsLiveBefore(select.outer);
++            }
++        }
++        if (flagsLive)
++        {
++            continue;
++        }
 +        if (fromRelop)
 +        {
-+            GenTree* cmp = m_compiler->gtNewOperNode(GT_CMP, TYP_VOID, cc->gtGetOp1(), cc->gtGetOp2());
++            GenTree* cmp = m_compiler->gtNewOperNode(cc->OperIsCmpCompare() ? GT_CMP : GT_TEST, TYP_VOID,
++                                                   cc->gtGetOp1(), cc->gtGetOp2());
 +            cmp->gtFlags |= GTF_SET_FLAGS;
 +            BlockRange().InsertBefore(cc, cmp);
 +            cmp->gtGetOp1()->ClearContained();
@@ -82,7 +97,36 @@ index bac51326..a01c8c4b 100644
          unsigned testedLocal = BAD_VAR_NUM;
          if (testBit)
          {
-@@ -15689,6 +15712,7 @@ bool Lowering::TryLowerMaskedXorSwap()
+@@ -15526,7 +15564,8 @@ bool Lowering::TryLowerMaskedXorSwap()
+             bit = bit->AsCast()->CastOp();
+         }
+         bool fromAnd = bit->OperIs(GT_AND) && bit->gtGetOp2()->IsIntegralConst(1) && !bit->gtSetFlags();
+-        bool fromRelop = bit->OperIsCompare() && bit->gtGetOp1()->TypeIs(TYP_INT, TYP_LONG);
++        bool fromRelop = (bit->OperIsCmpCompare() || bit->OperIs(GT_TEST_EQ, GT_TEST_NE)) &&
++                         bit->gtGetOp1()->TypeIs(TYP_INT, TYP_LONG);
+         bool fromCC = bit->OperIs(GT_SETCC) && bit->gtPrev != nullptr && bit->gtPrev->gtSetFlags() &&
+                       GenConditionDesc::Get(bit->AsCC()->gtCondition).oper == GT_NONE;
+ 
+@@ -15631,10 +15670,17 @@ bool Lowering::TryLowerMaskedXorSwap()
+         if (!valid)
+             continue;
+ 
++#ifdef TARGET_ARM64
++        if ((fromAnd || fromRelop) && AreFlagsLiveBefore(bit))
++        {
++            continue;
++        }
++#endif
+         if (fromAnd || fromRelop)
+         {
+             GenTree *test =
+-                m_compiler->gtNewOperNode(fromRelop ? GT_CMP : GT_TEST, TYP_VOID, bit->gtGetOp1(), bit->gtGetOp2());
++                m_compiler->gtNewOperNode(fromRelop && bit->OperIsCmpCompare() ? GT_CMP : GT_TEST, TYP_VOID,
++                                         bit->gtGetOp1(), bit->gtGetOp2());
+ 
+             test->gtFlags |= GTF_SET_FLAGS;
+             BlockRange().InsertBefore(bit, test);
+@@ -15689,6 +15735,7 @@ bool Lowering::TryLowerMaskedXorSwap()
  }
  
  //------------------------------------------------------------------------
@@ -90,7 +134,40 @@ index bac51326..a01c8c4b 100644
  // FindMultiplyCarryStore: Find a local's sole store and sole read in this block.
  // Ordinary intermediates require a preceding store and cannot be live out.
  // A loop carry may be read before its store and observed on the exit edge.
-@@ -16737,7 +16761,40 @@ bool Lowering::IsCarryFlagsCrossing(GenTree* node)
+@@ -16644,6 +16691,32 @@ bool Lowering::LowerFullAdders()
+     return changed;
+ }
+ 
++#ifdef TARGET_ARM64
++//------------------------------------------------------------------------
++// AreFlagsLiveBefore: Check whether inserting a flag producer would destroy an
++// existing flags value. False proves the insertion is safe.
++//
++// A late mask rewrite can introduce a flag producer after carry forwarding.
++// Check consumers before producers because ADCS/SBCS both read and write NZCV.
++// Flags never flow between blocks. Exhausting the bounded scan is conservative.
++bool Lowering::AreFlagsLiveBefore(GenTree* insertion)
++{
++    unsigned budget = 128;
++    for (GenTree* node = insertion; node != nullptr; node = node->gtNext)
++    {
++        if ((budget-- == 0) || node->OperConsumesFlags())
++        {
++            return true;
++        }
++        if (node->gtSetFlags())
++        {
++            return false;
++        }
++    }
++    return false;
++}
++#endif
++
+ //------------------------------------------------------------------------
+ // IsCarryFlagsCrossing: Check whether a node can sit between a carry producer
+ // and its consumer without its code writing the flags.
+@@ -16737,7 +16810,40 @@ bool Lowering::IsCarryFlagsCrossing(GenTree* node)
              return false;
      }
  #else
@@ -132,7 +209,7 @@ index bac51326..a01c8c4b 100644
  #endif
  }
  
-@@ -17675,6 +17732,309 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
+@@ -17675,6 +17781,309 @@ bool Lowering::TryLowerAddCarry(GenTreeOp* add)
  #endif // defined(TARGET_AMD64) || defined(TARGET_ARM64)
  
  #ifdef TARGET_ARM64
@@ -443,7 +520,7 @@ index bac51326..a01c8c4b 100644
  // LowerArm64MultiplyCarryLoops: Keep the last carry of each multiply-accumulate
  // in NZCV until the next limb, including across a counted loop's backedge.
 diff --git a/src/coreclr/jit/lower.h b/src/coreclr/jit/lower.h
-index ec018ddc..2abc2b7d 100644
+index ec018ddc..b7bc8590 100644
 --- a/src/coreclr/jit/lower.h
 +++ b/src/coreclr/jit/lower.h
 @@ -176,6 +176,9 @@ private:
@@ -472,7 +549,17 @@ index ec018ddc..2abc2b7d 100644
      void LowerArm64MultiplyCarryLoops();
      void TryLowerArm64MultiplyCarryLoop();
  #endif
-@@ -700,8 +702,15 @@ private:
+@@ -197,6 +199,9 @@ private:
+         GenTree* sum, GenTree* restore, GenTree* cc, GenTree* cast, GenTree* store, unsigned carryLocal);
+     bool IsCarryOperandAvailable(GenTree* operand, GenTree* producer, GenTree** moveStart);
+     bool IsCarryFlagsCrossing(GenTree* node);
++#ifdef TARGET_ARM64
++    bool AreFlagsLiveBefore(GenTree* insertion);
++#endif
+ #endif
+     GenTree* LowerJTrue(GenTreeOp* jtrue);
+ #ifdef TARGET_RISCV64
+@@ -700,8 +705,15 @@ private:
      bool        m_hasAddCarry          = false;
      BasicBlock* m_lastSubtractionBlock = nullptr;
      unsigned    m_carryLocalScanBudget = 262144; // Node/block budget for current-IR dead-on-exit proofs.
@@ -697,6 +784,331 @@ index 00000000..4d8a3a86
 +  </PropertyGroup>
 +  <ItemGroup>
 +    <Compile Include="Arm64FlagPreservation.cs" />
++  </ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/Arm64MaskCarry.cs b/src/tests/JIT/opt/Add/Arm64MaskCarry.cs
+new file mode 100644
+index 00000000..52144da1
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64MaskCarry.cs
+@@ -0,0 +1,167 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Numerics;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++public static unsafe class Arm64MaskCarry
++{
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Add(ulong a, ulong b, ref ulong c)
++    {
++        ulong s = a + b, k = s < a ? 1UL : 0UL, t = s + c;
++        c = k + (t < s ? 1UL : 0UL);
++        return t;
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong Sub(ulong a, ulong b, ref ulong c)
++    {
++        ulong s = a - b, k = a < b ? 1UL : 0UL, t = s - c;
++        c = k + (s < c ? 1UL : 0UL);
++        return t;
++    }
++
++    // Two distinct selects retain the mask local. The late mask pass must not
++    // insert a TEST across a carry that an earlier pass has already forwarded.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong LowBit(ulong a, ulong b, ulong x, ulong y, ulong bit, ulong* r)
++    {
++        ulong c = 0;
++        r[0] = Add(a, b, ref c);
++        ulong mask = 0UL - (bit & 1);
++        r[2] = x ^ ((x ^ y) & mask);
++        r[3] = a ^ ((a ^ b) & mask);
++        r[1] = Add(x, y, ref c);
++        return c;
++    }
++
++    // The first TEST precedes the carry producer; the second select requires
++    // a new TEST after it. Checking only the first insertion is insufficient.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong ReuseBit(ulong a, ulong b, ulong x, ulong y, ulong bit, ulong* r)
++    {
++        ulong mask = 0UL - (bit & 1);
++        r[2] = x ^ ((x ^ y) & mask);
++        ulong c = 0;
++        r[0] = Add(a, b, ref c);
++        r[3] = a ^ ((a ^ b) & mask);
++        r[1] = Add(x, y, ref c);
++        return c;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong Borrow(ulong a, ulong b, ulong x, ulong y, ulong bit, ulong* r)
++    {
++        ulong c = 0;
++        r[0] = Sub(a, b, ref c);
++        ulong mask = 0UL - (bit & 1);
++        r[2] = x ^ ((x ^ y) & mask);
++        r[3] = a ^ ((a ^ b) & mask);
++        r[1] = Sub(x, y, ref c);
++        return c;
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong ReuseBorrow(ulong a, ulong b, ulong x, ulong y, ulong bit, ulong* r)
++    {
++        ulong mask = 0UL - (bit & 1);
++        r[2] = x ^ ((x ^ y) & mask);
++        ulong c = 0;
++        r[0] = Sub(a, b, ref c);
++        r[3] = a ^ ((a ^ b) & mask);
++        r[1] = Sub(x, y, ref c);
++        return c;
++    }
++
++    // Shared XOR deltas exercise the separate swap matcher.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong Shared(ulong a, ulong b, ulong x, ulong y, ulong bit, ulong* r)
++    {
++        ulong c = 0;
++        r[0] = Add(a, b, ref c);
++        ulong mask = 0UL - (bit & 1), d = (x ^ y) & mask, e = (a ^ b) & mask;
++        r[2] = (x ^ d) + (a ^ e);
++        r[3] = (y ^ d) + (b ^ e);
++        r[1] = Add(x, y, ref c);
++        return c;
++    }
++
++    [MethodImpl(MethodImplOptions.AggressiveInlining)]
++    private static ulong MulAdd(ulong a, ulong b, ulong t, ref ulong c)
++    {
++        ulong hi = Math.BigMul(a, b, out ulong lo);
++        ulong s = lo + t;
++        hi += s < lo ? 1UL : 0UL;
++        ulong result = s + c;
++        c = hi + (result < s ? 1UL : 0UL);
++        return result;
++    }
++
++    // Include a multiply/carry row on either side of the low-bit selects.
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong Products(ulong a, ulong b, ulong x, ulong y, ulong bit, ulong* r)
++    {
++        ulong c = 0;
++        r[0] = MulAdd(a, b, x, ref c);
++        ulong mask = 0UL - (bit & 1);
++        r[2] = x ^ ((x ^ y) & mask);
++        r[3] = a ^ ((a ^ b) & mask);
++        r[1] = MulAdd(a, y, b, ref c);
++        return c;
++    }
++
++    [Fact]
++    public static int TestEntryPoint()
++    {
++        ulong[] values = { 0, 1, 2, 4, 5, 0x80000000, 0xffffffff, 1UL << 32, 1UL << 63, ulong.MaxValue };
++        ulong* r = stackalloc ulong[4];
++        BigInteger wordMask = (BigInteger.One << 64) - 1;
++        for (int repeat = 0; repeat < 100; repeat++)
++        foreach (ulong a in values)
++        foreach (ulong b in values)
++        foreach (ulong bit in values)
++        {
++            ulong x = values[(repeat + 3) % values.Length], y = values[(repeat + 4) % values.Length];
++            bool odd = (bit & 1) != 0;
++            BigInteger sum = a + (BigInteger)b + ((x + (BigInteger)y) << 64);
++            ulong carry = LowBit(a, b, x, y, bit, r);
++            Check(sum, carry, r, wordMask);
++            CheckSelect(a, b, x, y, odd, r);
++            carry = ReuseBit(a, b, x, y, bit, r);
++            Check(sum, carry, r, wordMask);
++            CheckSelect(a, b, x, y, odd, r);
++            BigInteger difference = a - (BigInteger)b + ((x - (BigInteger)y) << 64);
++            carry = Borrow(a, b, x, y, bit, r);
++            Check(difference, carry, r, wordMask);
++            CheckSelect(a, b, x, y, odd, r);
++            carry = ReuseBorrow(a, b, x, y, bit, r);
++            Check(difference, carry, r, wordMask);
++            CheckSelect(a, b, x, y, odd, r);
++            carry = Shared(a, b, x, y, bit, r);
++            Check(sum, carry, r, wordMask);
++            if (r[2] != unchecked(odd ? y + b : x + a) || r[3] != unchecked(odd ? x + a : y + b))
++                throw new Exception("Shared mask results");
++            BigInteger product = (BigInteger)a * b + x + (((BigInteger)a * y + b) << 64);
++            carry = Products(a, b, x, y, bit, r);
++            Check(product, carry, r, wordMask);
++            CheckSelect(a, b, x, y, odd, r);
++        }
++        return 100;
++    }
++
++    private static void Check(BigInteger expected, ulong carry, ulong* r, BigInteger wordMask)
++    {
++        ulong high = expected.Sign < 0 ? 1UL : (ulong)(expected >> 128);
++        if (r[0] != (ulong)(expected & wordMask) || r[1] != (ulong)((expected >> 64) & wordMask) || carry != high)
++            throw new Exception("Flags overwritten by mask select");
++    }
++
++    private static void CheckSelect(ulong a, ulong b, ulong x, ulong y, bool odd, ulong* r)
++    {
++        if (r[2] != (odd ? y : x) || r[3] != (odd ? b : a))
++            throw new Exception("Low-bit mask results");
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/Arm64MaskCarry.csproj b/src/tests/JIT/opt/Add/Arm64MaskCarry.csproj
+new file mode 100644
+index 00000000..9c43b192
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64MaskCarry.csproj
+@@ -0,0 +1,11 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="Arm64MaskCarry.cs" />
++  </ItemGroup>
++</Project>
+diff --git a/src/tests/JIT/opt/Add/Arm64TestMasks.cs b/src/tests/JIT/opt/Add/Arm64TestMasks.cs
+new file mode 100644
+index 00000000..47bb2275
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64TestMasks.cs
+@@ -0,0 +1,113 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System;
++using System.Runtime.CompilerServices;
++using Xunit;
++
++public static class Arm64TestMasks
++{
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong Eq64(ulong x, ulong y, ulong a, ulong b, out ulong other)
++    {
++        ulong mask = 0UL - ((x & y) == 0 ? 1UL : 0UL);
++        other = x ^ ((y ^ x) & mask);
++        return b ^ ((a ^ b) & mask);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong Ne64(ulong x, ulong y, ulong a, ulong b, out ulong other)
++    {
++        ulong mask = 0UL - ((x & y) != 0 ? 1UL : 0UL);
++        other = x ^ ((y ^ x) & mask);
++        return b ^ ((a ^ b) & mask);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint Eq32(uint x, uint y, uint a, uint b, out uint other)
++    {
++        uint mask = 0U - ((x & y) == 0 ? 1U : 0U);
++        other = x ^ ((y ^ x) & mask);
++        return b ^ ((a ^ b) & mask);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint Ne32(uint x, uint y, uint a, uint b, out uint other)
++    {
++        uint mask = 0U - ((x & y) != 0 ? 1U : 0U);
++        other = x ^ ((y ^ x) & mask);
++        return b ^ ((a ^ b) & mask);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong SwapEq64(ulong x, ulong y, ulong a, ulong b, out ulong other)
++    {
++        ulong mask = 0UL - ((x & y) == 0 ? 1UL : 0UL);
++        ulong delta = (a ^ b) & mask;
++        ulong second = (x ^ y) & mask;
++        other = (b ^ delta) + (y ^ second);
++        return (a ^ delta) + (x ^ second);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static ulong SwapNe64(ulong x, ulong y, ulong a, ulong b, out ulong other)
++    {
++        ulong mask = 0UL - ((x & y) != 0 ? 1UL : 0UL);
++        ulong delta = (a ^ b) & mask;
++        ulong second = (x ^ y) & mask;
++        other = (b ^ delta) + (y ^ second);
++        return (a ^ delta) + (x ^ second);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint SwapEq32(uint x, uint y, uint a, uint b, out uint other)
++    {
++        uint mask = 0U - ((x & y) == 0 ? 1U : 0U);
++        uint delta = (a ^ b) & mask;
++        uint second = (x ^ y) & mask;
++        other = (b ^ delta) + (y ^ second);
++        return (a ^ delta) + (x ^ second);
++    }
++
++    [MethodImpl(MethodImplOptions.NoInlining)]
++    private static uint SwapNe32(uint x, uint y, uint a, uint b, out uint other)
++    {
++        uint mask = 0U - ((x & y) != 0 ? 1U : 0U);
++        uint delta = (a ^ b) & mask;
++        uint second = (x ^ y) & mask;
++        other = (b ^ delta) + (y ^ second);
++        return (a ^ delta) + (x ^ second);
++    }
++
++    [Fact]
++    public static int TestEntryPoint()
++    {
++        ulong[] inputs = { 0, 1, 2, 3, 7, 0x80000000, 0xffffffff, 1UL << 32, 1UL << 63, ulong.MaxValue };
++        for (int iteration = 0; iteration < 100; iteration++)
++        foreach (ulong x in inputs)
++        foreach (ulong y in inputs)
++        {
++            ulong a = 17UL + (ulong)iteration, b = 42UL + x;
++            bool eq = (x & y) == 0;
++            ulong r = Eq64(x, y, a, b, out ulong other);
++            if (r != (eq ? a : b) || other != (eq ? y : x)) throw new Exception("TEST_EQ select64");
++            r = Ne64(x, y, a, b, out other);
++            if (r != (eq ? b : a) || other != (eq ? x : y)) throw new Exception("TEST_NE select64");
++            r = SwapEq64(x, y, a, b, out other);
++            if (r != unchecked(eq ? b + y : a + x) || other != unchecked(eq ? a + x : b + y)) throw new Exception("TEST_EQ swap64");
++            r = SwapNe64(x, y, a, b, out other);
++            if (r != unchecked(eq ? a + x : b + y) || other != unchecked(eq ? b + y : a + x)) throw new Exception("TEST_NE swap64");
++            uint xx = (uint)x, yy = (uint)y, aa = (uint)a, bb = (uint)b;
++            eq = (xx & yy) == 0;
++            uint rr = Eq32(xx, yy, aa, bb, out uint other32);
++            if (rr != (eq ? aa : bb) || other32 != (eq ? yy : xx)) throw new Exception("TEST_EQ select32");
++            rr = Ne32(xx, yy, aa, bb, out other32);
++            if (rr != (eq ? bb : aa) || other32 != (eq ? xx : yy)) throw new Exception("TEST_NE select32");
++            rr = SwapEq32(xx, yy, aa, bb, out other32);
++            if (rr != unchecked(eq ? bb + yy : aa + xx) || other32 != unchecked(eq ? aa + xx : bb + yy)) throw new Exception("TEST_EQ swap32");
++            rr = SwapNe32(xx, yy, aa, bb, out other32);
++            if (rr != unchecked(eq ? aa + xx : bb + yy) || other32 != unchecked(eq ? bb + yy : aa + xx)) throw new Exception("TEST_NE swap32");
++        }
++        return 100;
++    }
++}
+diff --git a/src/tests/JIT/opt/Add/Arm64TestMasks.csproj b/src/tests/JIT/opt/Add/Arm64TestMasks.csproj
+new file mode 100644
+index 00000000..6c801599
+--- /dev/null
++++ b/src/tests/JIT/opt/Add/Arm64TestMasks.csproj
+@@ -0,0 +1,10 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <RequiresProcessIsolation>true</RequiresProcessIsolation>
++    <DebugType>None</DebugType>
++    <Optimize>True</Optimize>
++  </PropertyGroup>
++  <ItemGroup>
++    <Compile Include="Arm64TestMasks.cs" />
 +  </ItemGroup>
 +</Project>
 diff --git a/src/tests/JIT/opt/Add/Arm64UnrolledCarry.cs b/src/tests/JIT/opt/Add/Arm64UnrolledCarry.cs

@@ -351,6 +351,11 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ReduceWideCorrect(out Fp result, in Fp quotient)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            ReduceWideCorrectArm64(out result, quotient);
+            return;
+        }
         ulong t0 = quotient._l0, t1 = quotient._l1, t2 = quotient._l2;
         ulong t3 = quotient._l3, t4 = quotient._l4, t5 = quotient._l5;
         // |value|<3pR yields a quotient in (-3p,4p). Since 4p<2^383,

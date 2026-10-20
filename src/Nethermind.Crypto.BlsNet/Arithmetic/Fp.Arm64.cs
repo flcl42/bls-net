@@ -8,6 +8,52 @@ namespace Nethermind.Crypto.BlsNet.Arithmetic;
 
 public readonly partial struct Fp
 {
+    // 4p followed by 2p, for the signed |value| < 3pR correction.
+    private static class Arm64WideCorrection
+    {
+        internal static readonly ulong[] Limbs =
+        [
+            0xe7fbfffffffeaaac, 0x7aaffffac54ffffe, 0x9cc34a83dac3d890,
+            0x91dd2e13ce144afd, 0x2c6e9ed90d2eb35d, 0x680447a8e5ff9a69,
+            0x73fdffffffff5556, 0x3d57fffd62a7ffff, 0xce61a541ed61ec48,
+            0xc8ee9709e70a257e, 0x96374f6c869759ae, 0x340223d472ffcd34,
+        ];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void ReduceWideCorrectArm64(out Fp result, in Fp quotient)
+    {
+        ref ulong c = ref MemoryMarshal.GetArrayDataReference(Arm64WideCorrection.Limbs);
+        ulong mask = 0UL - (quotient._l5 >> 63), carry = 0;
+        ulong h0 = AddCarry(quotient._l0, c & mask, ref carry);
+        ulong h1 = AddCarry(quotient._l1, Unsafe.Add(ref c, 1) & mask, ref carry);
+        ulong h2 = AddCarry(quotient._l2, Unsafe.Add(ref c, 2) & mask, ref carry);
+        ulong h3 = AddCarry(quotient._l3, Unsafe.Add(ref c, 3) & mask, ref carry);
+        ulong h4 = AddCarry(quotient._l4, Unsafe.Add(ref c, 4) & mask, ref carry);
+        ulong h5 = AddCarry(quotient._l5, Unsafe.Add(ref c, 5) & mask, ref carry);
+        ulong borrow = 0;
+        ulong d0 = SubBorrow(h0, Unsafe.Add(ref c, 6), ref borrow);
+        ulong d1 = SubBorrow(h1, Unsafe.Add(ref c, 7), ref borrow);
+        ulong d2 = SubBorrow(h2, Unsafe.Add(ref c, 8), ref borrow);
+        ulong d3 = SubBorrow(h3, Unsafe.Add(ref c, 9), ref borrow);
+        ulong d4 = SubBorrow(h4, Unsafe.Add(ref c, 10), ref borrow);
+        ulong d5 = SubBorrow(h5, Unsafe.Add(ref c, 11), ref borrow);
+        mask = ChoiceToMask(borrow);
+        ReduceArm64(out result, Select(h0, d0, mask), Select(h1, d1, mask), Select(h2, d2, mask),
+            Select(h3, d3, mask), Select(h4, d4, mask), Select(h5, d5, mask));
+    }
+
+    // sa*sb - a0*b0 - a1*b1 is nonnegative and below 2p^2 < pR.
+    // Keeping both subtractions local removes a wide scratch round trip.
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void ReduceWideImaginaryArm64(out Fp result, in FpWide sum, in FpWide first, in FpWide second)
+    {
+        SubtractWideInline(out FpWide difference, sum, first);
+        SubtractWideInline(out difference, difference, second);
+        ReduceWideCoreArm64(out Fp quotient, difference);
+        ReduceArm64(out result, quotient._l0, quotient._l1, quotient._l2, quotient._l3, quotient._l4, quotient._l5);
+    }
+
     // An isolated leaf preserves carry/select recognition when the caller has
     // a loop or another large inlined arithmetic body. Both policies share it.
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]

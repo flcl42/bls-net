@@ -35,14 +35,18 @@ The measured Release `clrjit.dll` has SHA-256 `6DE7EEC60C3D117ACC7DB637F5B7D1416
 
 ## ARM64 carry and row follow-up
 
-Apply [`arm64.patch`](arm64.patch) to **74ed610683646896bfd9f22bbbcea93124b44f4a**, which already contains both x64 follow-ups above. The runtime branch is `flcl42/runtime:arm64-carry`, currently **8a918efed98f5744e387e79223363898a43ea883**. It adds:
+Apply [`arm64.patch`](arm64.patch) to **74ed610683646896bfd9f22bbbcea93124b44f4a**, which already contains both x64 follow-ups above. The runtime branch is `flcl42/runtime:arm64-carry`, currently **c318f5acd64bd5acebf5190f90cb7387b8e950eb**. It adds:
 
 * ARM64 mask selects and shared XOR swaps using CSEL, including integer comparison masks. Existing all-use, source-definition, flag-clobber, escaping-local and EH checks remain in force.
 * NZCV forwarding across integer loads/stores, stack fields and addresses, constants, complements, ordinary non-S arithmetic, shifts and widening products. Calls, volatile/GC stores and unknown intrinsic expansions remain excluded. Memory accesses retain their order.
 * Straight-line unsigned multiply rows with a high-word-plus-C carry representation. Intermediate lanes use ADCS/ADC/ADDS; the row ends with one drain. Both halves must describe the same reaching operand values, changed intermediates must have one reader, and moving a carry read in either direction must cross no redefinition. Analysis has bounded rescans and excludes EH.
 * An ARM64-only 1,048,576-visit allowance for extended single-use carry scans. Fully unrolled Montgomery kernels otherwise exhaust the former 65,536 allowance before their last chains. x64 retains its original allowance and lowering behavior.
+* Correct comparison reconstruction: integer equality/order comparisons produce CMP, while `(x & y) == 0`/`!= 0` produce TEST. Both direct selects and shared XOR swaps retain their original condition.
+* Before a late ARM64 mask rewrite inserts CMP/TEST, prove no existing flags consumer needs the overwritten value. The bounded scan checks flag consumers before setters, since ADCS/SBCS do both. It checks every potential repeated TEST and both mask matchers. Rejected cases retain their original branch-free XOR-mask arithmetic.
 
 `Arm64FlagPreservation` checks multiply rows, loads/stores, stack fields, complements, volatile accesses, aliases and comparison masks against independent references. `Arm64UnrolledCarry` checks twelve vector carry chains and their widening products against BigInteger. Both are in `src/tests/JIT/opt/Add` and the local standalone runner. The complete **23-test x64 Checked matrix passed** with tiering 0/1 crossed with default, `JitStress=2` and `JitStressRegs=1/3/8`. All **171 common x64 library method instruction listings are identical** to the 74ed6106 baseline, including the ARM-specific library dispatches.
+
+Correctness review identified two miscompilations in runtime `8a918efe`: TEST comparisons rebuilt as CMP (V1), and late TEST insertion overwriting a forwarded carry/borrow (V2). Use `c318f5ac` or later. `Arm64TestMasks` adds eight 32/64-bit EQ/NE direct-select and shared-swap cases; `Arm64MaskCarry` adds interleaved carry, borrow, repeated-test, shared-swap and multiply-row cases against BigInteger. All **25 fixtures pass** with the Release x64 JIT and all ten Checked stress/tiering configurations. Extracted ARM64 leaves fail before the fixes and pass after them under QEMU: 80,000 V1 and 600,000 V2 comparisons. This verifies generated leaf arithmetic under emulation; the complete native ARM64 CLR matrix and Linux/Apple silicon timings are pending at this checkpoint.
 
 Build cross JITs sequentially with `build-runtime.cmd -x64 -release -component alljits -ninja`, then repeat with `-checked`. This runtime version produces `clrjit_universal_arm64_x64.dll`; target OS/ABI comes from the host. The recorded private host and JIT use JIT-EE GUID `539ba29b-25d8-4b34-895a-01f513a3683a`.
 

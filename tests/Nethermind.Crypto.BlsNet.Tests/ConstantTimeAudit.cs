@@ -28,6 +28,9 @@ internal static class ConstantTimeAudit
         // Exercise the isolated ARM64 leaf on the x64 AltJit host as well.
         // Its portable high-half fallback is checked by the kernel tests.
         Fp.MultiplyArm64(out ar, ar, a);
+        Fp.MultiplyWide(out FpWide firstProduct, a, a);
+        Fp.AddWide(out FpWide productSum, firstProduct, firstProduct);
+        Fp.ReduceWideImaginaryArm64(out ar, productSum, firstProduct, default);
         Fp.InverseConstantTime(out ar, ar);
         Fp.Select(out ar, a, ar, mask); Fp.ConditionalNegate(out ar, ar, mask);
         Fp.ConditionalSwap(ref a, ref ar, mask); mask ^= Fp.EqualMask(a, ar) ^ Fp.IsZeroMask(a);
