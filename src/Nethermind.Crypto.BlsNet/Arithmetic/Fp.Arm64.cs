@@ -400,9 +400,10 @@ public readonly partial struct Fp
     }
 
     // For |value|<pR, adding pR to a negative input makes it nonnegative
-    // and below pR. Normalize the high half before the multiplication rows:
-    // its sign is already available, so this carry chain need not wait for
-    // the quotient's high word. Only the ordinary final p subtraction remains.
+    // and below pR. Normalize the high half between the low-half row groups:
+    // its sign is already available, so this carry chain can overlap the
+    // multiply work instead of waiting for the quotient's high word.
+    // Only the ordinary final p subtraction remains.
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void ReduceWideSmallArm64(out Fp result, in FpWide value)
@@ -410,6 +411,11 @@ public readonly partial struct Fp
         ref ulong m = ref MemoryMarshal.GetArrayDataReference(ModulusLimbs);
         ulong m0 = m, m1 = Unsafe.Add(ref m, 1), m2 = Unsafe.Add(ref m, 2);
         ulong m3 = Unsafe.Add(ref m, 3), m4 = Unsafe.Add(ref m, 4), m5 = Unsafe.Add(ref m, 5);
+        ulong t0 = value.L0, t1 = value.L1, t2 = value.L2;
+        ulong t3 = value.L3, t4 = value.L4, t5 = value.L5;
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
+        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
         ulong mask = 0UL - (value.L11 >> 63), carry = 0;
         ulong h0 = AddCarry(value.L6, m0 & mask, ref carry);
         ulong h1 = AddCarry(value.L7, m1 & mask, ref carry);
@@ -417,11 +423,6 @@ public readonly partial struct Fp
         ulong h3 = AddCarry(value.L9, m3 & mask, ref carry);
         ulong h4 = AddCarry(value.L10, m4 & mask, ref carry);
         ulong h5 = AddCarry(value.L11, m5 & mask, ref carry);
-        ulong t0 = value.L0, t1 = value.L1, t2 = value.L2;
-        ulong t3 = value.L3, t4 = value.L4, t5 = value.L5;
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
-        ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
         ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
         ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
         ReduceStepArm64(m0, m1, m2, m3, m4, m5, ref t0, ref t1, ref t2, ref t3, ref t4, ref t5);
