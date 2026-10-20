@@ -78,189 +78,57 @@ Use `--filter 'Fp multiply|Fp square|Fp2 multiply|Fp2 square|CT Fp inverse|G1 MS
 
 ## ARM64 hardware
 
-Captured 2026-10-19 by CI on GitHub-hosted `ubuntu-24.04-arm` and `macos-15` (Apple silicon) runners: stock .NET 10.0.13 and .NET 11 RC2, `--quick`, tiering disabled, one run per cell on shared VMs, so treat a few percent as noise. blst is the same pinned commit built with its ARM64 assembly. Each cell is managed time, with its ratio to blst; blst's own time is in the last column.
+Final measurements on 2026-10-20 use library **582b229b0131965f76cde4f55c228d78f9e858c3** and runtime **5f087d704e227bd3124287f331187fb0240ff8ee**, with no additional runtime patches. Two separate workflows, [run 39423063991](https://github.com/flcl42/bls-net/actions/runs/39423063991) and [run 39426439922](https://github.com/flcl42/bls-net/actions/runs/39426439922), both completed on Linux ARM64 and Apple silicon with `RUN_MACOS=true`. Each workflow takes three alternating patched/stock captures per policy, giving **six captures per platform** for the final medians below. The final documentation commit changes no compiled source or benchmark settings from 582b229.
 
-| Linux ARM64 | .NET 10 compact | .NET 10 expanded | .NET 11 expanded | blst |
-|---|---:|---:|---:|---:|
-| Fp multiply (ns) | 79.7 (2.04x) | 79.7 (2.04x) | 79.7 (2.03x) | 39.1 |
-| Fp2 multiply (ns) | 296.5 (2.62x) | 249.3 (2.21x) | 249.4 (2.21x) | 113.0 |
-| G1 multiply (µs) | 230.1 (2.58x) | 186.4 (2.09x) | 162.5 (1.82x) | 89.0 |
-| G2 multiply (µs) | 323.7 (1.77x) | 284.8 (1.56x) | 284.9 (1.55x) | 183.2 |
-| G1 MSM 128 (ms) | 9.16 (2.69x) | 7.87 (2.31x) | 6.27 (1.84x) | 3.41 |
-| G2 MSM 128 (ms) | 17.98 (1.96x) | 11.64 (1.27x) | 11.64 (1.27x) | 9.17 |
-| Map to G2 (µs) | 385.6 (2.40x) | 355.7 (2.22x) | 355.6 (2.22x) | 160.5 |
-| Pairing check 2 (ms) | 2.02 (2.36x) | 1.91 (2.24x) | 1.91 (2.24x) | 0.85 |
+Linux is GitHub `ubuntu-24.04-arm`, Neoverse-N2, pinned to CPU 0. Apple is `macos-15`, Apple M1 (Virtual), unpinned. ReadyToRun and tiering are disabled. The quick harness reports the best of seven rounds; shared VM clocks, scheduling and native-call overhead remain limitations. Ratios divide the final managed median by the native median from the same patched-runtime processes. Separate workflows allocate independent runners; these results are measurements, not confidence intervals or a hardware-wide guarantee.
 
-| macOS ARM64 | .NET 10 compact | .NET 10 expanded | .NET 11 expanded | blst |
-|---|---:|---:|---:|---:|
-| Fp multiply (ns) | 80.8 (2.77x) | 80.2 (2.76x) | 79.0 (2.57x) | 29.1 |
-| Fp2 multiply (ns) | 300.1 (3.32x) | 275.8 (2.98x) | 245.2 (2.67x) | 90.5 |
-| G1 multiply (µs) | 210.6 (2.66x) | 175.8 (2.22x) | 157.9 (2.00x) | 79.2 |
-| G2 multiply (µs) | 300.3 (2.02x) | 269.6 (1.82x) | 269.8 (1.82x) | 148.5 |
-| G1 MSM 128 (ms) | 8.35 (3.05x) | 7.23 (2.63x) | 6.04 (2.17x) | 2.74 |
-| G2 MSM 128 (ms) | 17.83 (2.41x) | 11.15 (1.51x) | 11.16 (1.47x) | 7.40 |
-| Map to G2 (µs) | 364.2 (2.76x) | 342.8 (2.59x) | 342.9 (2.60x) | 132.1 |
-| Pairing check 2 (ms) | 1.97 (2.81x) | 1.74 (2.45x) | 1.74 (2.49x) | 0.70 |
+Cells are **stock .NET 11 / patched baseline 74ed6106 / patched final / blst**. Stock is .NET **11.0.0-rc.2.26504.105** running the final library. The historical patched baseline is [run 39315754704](https://github.com/flcl42/bls-net/actions/runs/39315754704), library `1857b51af7414a709bbfebeb3a71b884c1eb3ee7`, runtime `74ed610683646896bfd9f22bbbcea93124b44f4a`. It includes the original x64 carry/select follow-ups but predates the ARM64 work. Baseline cells use its three-capture median, except **†** rows available only in its single quick capture. Thus baseline-to-final changes include both library and JIT improvements. The blst column uses the final runs' pinned ARM64 assembly at `f62244ef50ad1a603decdb8f215e982d2a467bb6`.
 
-Expanded beats compact on ARM64 even on .NET 10, unlike x64, so ARM64 defaults to expanded on every runtime. Stock ARM64 JITs still materialize carries with `cmp`/`cset` (see [code-generation findings](constant-time-validation.md#hot-kernel-findings-and-policy)), which leaves managed code about 1.3–3x slower than blst's ARM64 assembly. That is the same kind of gap the carry-aware JIT closes on x64. CI uploads the full output of every run as artifacts.
+The table uses the default **expanded** ARM64 policy and regular operations. All 18 listed targets are faster than blst in each workflow's three-capture median on both platforms. Pooled margins are **1.44–41.80% on Linux** and **4.48–44.81% on Apple silicon**. Linux cyclotomic square remains the narrowest margin: 1.35% in the first workflow and 1.61% in the second. Apple timing is noisier: an individual second-run map G1 capture reaches 2.374x while that workflow's median is 0.939x; individual Fp/Fp2 square, Fp2-times-three, Miller-eight and two-sparse-product captures also cross parity. No samples are discarded. The claim concerns repeated medians; a few percent on shared VMs should be read cautiously.
 
-### Carry-aware runtime baseline
-
-[Run 39304746175](https://github.com/flcl42/bls-net/actions/runs/39304746175) measured runtime `74ed6106` on real Linux ARM64 with three alternating repetitions per host/policy, one pinned core, tiering and ReadyToRun disabled, and native blst in every process. Expanded-policy medians below are in **µs**. The library was `48bf683b`; these are the baseline before the ARM64 changes in [arm64.patch](../jit/arm64.patch).
-
-| Operation | Stock .NET 11 | Patched before | blst |
+| Operation | Linux | Apple silicon | After/blst Linux / Apple |
 |---|---:|---:|---:|
-| Fp multiply | 0.080 | 0.050 | 0.039 |
-| Fp square | 0.076 | 0.042 | 0.034 |
-| Fp2 multiply | 0.250 | 0.153 | 0.113 |
-| Fp2 square | 0.178 | 0.109 | 0.085 |
-| Fr mul+add | 0.047 | 0.029 | 0.024 |
-| Fp mul+add | 0.096 | 0.059 | 0.045 |
-| CT Fp inverse | 5.480 | 4.832 | 2.859 |
-| Fp inverse, same inputs | 3.528 | 3.064 | 2.859 |
-| Pairing check 2 | 1911.954 | 1167.972 | 853.434 |
-| G1 multiply | 162.148 | 100.259 | 89.115 |
-| G2 multiply | 284.584 | 174.549 | 182.941 |
-| G1 MSM 128 | 6265.223 | 4034.174 | 3410.067 |
-| G2 MSM 128 | 11615.947 | 7326.774 | 9169.268 |
-| map G1 | 98.043 | 58.226 | 44.777 |
-| map G2 | 355.490 | 211.078 | 160.484 |
+| Fp multiply (ns) | 111.73 / 50.42 / 35.74 / 39.17 | 97.54 / 38.51 / 27.49 / 30.80 | 0.913x / 0.893x |
+| Fp square (ns) | 99.76 / 42.26 / 33.00 / 34.48 | 96.53 / 32.75 / 24.62 / 25.97 | 0.957x / 0.948x |
+| Fp2 multiply (ns) | 333.50 / 152.54 / 108.05 / 113.02 | 309.36 / 120.45 / 76.17 / 92.42 | 0.956x / 0.824x |
+| Fp2 square (ns) | 243.01 / 109.13 / 78.18 / 84.79 | 215.31 / 83.24 / 59.15 / 61.92 | 0.922x / 0.955x |
+| Fr mul+add (ns) | 58.62 / 29.33 / 21.31 / 24.07 | 61.83 / 29.17 / 19.22 / 22.95 | 0.885x / 0.838x |
+| Fp mul+add (ns) | 129.28 / 58.61 / 41.29 / 44.84 | 121.60 / 52.41 / 36.95 / 47.91 | 0.921x / 0.771x |
+| ReduceWide (ns) | 60.41 / 43.50† / 22.36 / 23.39 | 56.48 / 35.95† / 17.35 / 19.09 | 0.956x / 0.909x |
+| Fp inverse (variable, same inputs) (µs) | 3.301 / 3.065 / 2.640 / 2.857 | 2.356 / 2.094 / 1.750 / 2.875 | 0.924x / 0.609x |
+| Fp12 multiply (µs) | 5.743 / 2.991 / 2.009 / 2.160 | 4.937 / 2.400 / 1.539 / 1.689 | 0.930x / 0.911x |
+| Fp12 square (µs) | 4.394 / 2.172† / 1.490 / 1.545 | 3.742 / 1.705† / 1.152 / 1.240 | 0.964x / 0.929x |
+| Cyclotomic square (µs) | 2.790 / 1.481† / 0.929 / 0.942 | 2.529 / 1.152† / 0.697 / 0.749 | 0.986x / 0.931x |
+| Pairing check 2 (µs) | 2280.631 / 1167.526 / 786.354 / 853.776 | 1938.858 / 914.942 / 612.000 / 682.260 | 0.921x / 0.897x |
+| G1 multiply (µs) | 201.249 / 100.313 / 68.494 / 89.250 | 177.605 / 83.167 / 53.291 / 77.479 | 0.767x / 0.688x |
+| G2 multiply (µs) | 367.790 / 174.573 / 123.402 / 183.034 | 328.667 / 134.042 / 89.791 / 142.812 | 0.674x / 0.629x |
+| G1 MSM 128 (µs) | 8156.539 / 4033.972 / 2855.327 / 3410.559 | 7289.416 / 3185.542 / 2247.958 / 2656.500 | 0.837x / 0.846x |
+| G2 MSM 128 (µs) | 14892.946 / 7328.484 / 5335.443 / 9167.572 | 13210.750 / 5905.458 / 4101.938 / 7431.979 | 0.582x / 0.552x |
+| map G1 (µs) | 127.874 / 58.173 / 42.942 / 44.783 | 114.875 / 47.625 / 35.125 / 38.688 | 0.959x / 0.908x |
+| map G2 (µs) | 463.442 / 211.099 / 151.474 / 160.493 | 418.646 / 165.167 / 117.730 / 130.250 | 0.944x / 0.904x |
 
-The cold runtime/testhost plus both JITs took 998 seconds. All library suites and all twenty Release/Checked stress/tiering configurations passed. Native timings remain specific to each capture; the table uses the patched process's native medians.
+Production retains the best measured small signed correction and removes all experimental reduction leaves, comparison-only benchmark rows and audit calls. Useful pinned-native raw-product/REDC references and signed-input/output-alias tests remain. General signed reduction's quotient shortcuts are confined to variable-time Fp6/Fp12 formulas. Secret small, positive and difference reductions retain branch-free arithmetic. The signed APIs have broader contracts than blst's positive REDC; their benchmark wrappers pass identical valid inputs.
 
-### First ARM64 candidate on hardware
+The accepted internal small signed reducer remains **24.12/23.39 ns (1.031x) on Linux**, and 18.54/18.64 ns (0.995x) on Apple silicon. Positive REDC measures 23.08/23.39 ns (0.987x) and 18.23/18.74 ns (0.973x), respectively; near-parity fluctuations in this internal helper do not change the regular-operation results. No further reducer schedules are retained or planned in this checkpoint. The optional compact override is correctness-tested but does not have the expanded policy's parity claim. Constant-time operation speed is outside this target.
 
-[Run 39314252575](https://github.com/flcl42/bls-net/actions/runs/39314252575) measures library `2441b94` with runtime `8a918efe`, three alternating captures per host/policy on a pinned Neoverse-N2 core. All 7,936,156 native-comparison checks pass under both policies; all 23 JIT entry points pass in all twenty Release/Checked stress/tiering configurations. The table covers regular operations using expanded kernels; all values are **µs**. The earlier patched column uses the original library and runtime `74ed6106`. Stock uses the candidate library and .NET 11 RC2. Its ARM64 carry-row formulations are intended for the patched JIT and can cost more on stock ARM64.
+Both final workflows pass all **31 JIT fixtures in all 24 named configurations** on each platform: Release/Checked × tiering 0/1 × default, JitStress=1/2 and JitStressRegs=1/3/8. This includes 300 fixed-seed generated carry methods, each invocation checking 120,000 input/alias comparisons against independent MinOpts UInt128 references, plus deterministic stale-flags, containment and prolog regressions. Every platform passes **8,478,707 native-reference checks per policy** and **8,133,079 managed-only checks per policy**. The stock five-platform matrix covers Linux x64/ARM64, Windows x64/ARM64 and Apple silicon; the final-commit run is linked from the final report.
 
-| Operation | Stock | Patched before | First candidate | blst |
-|---|---:|---:|---:|---:|
-| Fp multiply | 0.112 | 0.050 | 0.036 | 0.039 |
-| Fp square | 0.093 | 0.042 | 0.053 | 0.034 |
-| Fp2 multiply | 0.336 | 0.153 | 0.115 | 0.113 |
-| Fp2 square | 0.243 | 0.109 | 0.078 | 0.085 |
-| Fr mul+add | 0.047 | 0.029 | 0.024 | 0.024 |
-| Fp mul+add | 0.130 | 0.059 | 0.041 | 0.045 |
-| Fp inverse, kernel | 3.343 | 2.946 | 2.799 | 2.855 |
-| Fp inverse, same inputs | 3.493 | 3.064 | 2.909 | 2.858 |
-| Fp12 multiply | 6.033 | 2.992 | 2.136 | 2.157 |
-| Pairing check 2 | 2381.059 | 1167.972 | 824.631 | 853.741 |
-| G1 multiply | 196.814 | 100.259 | 69.610 | 89.027 |
-| G2 multiply | 369.900 | 174.549 | 127.621 | 183.174 |
-| G1 MSM 128 | 8096.782 | 4034.174 | 2883.832 | 3409.505 |
-| G2 MSM 128 | 14994.903 | 7326.774 | 5566.585 | 9168.354 |
-| map G1 | 116.700 | 58.226 | 43.874 | 44.777 |
-| map G2 | 446.087 | 211.078 | 156.134 | 160.470 |
+Dedicated native constant-time captures inventory **172 compiled methods**, **13 external/runtime callees** and **zero variable-latency candidates** per platform. The six arithmetic leaves below have zero conditional branches in both native captures; public fixed-count loops, initialization/error paths and unresolved runtime callees still require contextual review. This inventory is not a formal constant-time proof. The final local ARM64 AltJit inventory covers 163 methods, 23 unresolved/runtime callees and zero variable-latency candidates. This continuation validated behavior through managed CLR tests on real ARM64 hardware and used AltJit only for inspection; it did not assemble or execute extracted JIT code.
 
-This is an intermediate measurement, not a parity claim. Expanded Fp square's loop caller materializes carries despite the efficient isolated arithmetic listing. Fp2 multiply, Fr mul+add and the same-input variable inverse also need further measurements or improvements. The unfiltered quick sweep measures Fp12 square once at 1.548 µs versus blst's 1.544 µs; it needs repeated confirmation. Regular operations are the speed targets; constant-time paths remain correctness and generated-code security requirements. The paired constant-time inversion experiment is shelved locally and is not part of the branch.
-
-### Isolated square and carry rows on hardware
-
-[Run 39319334072](https://github.com/flcl42/bls-net/actions/runs/39319334072) measures library `ec20417`, runtime `8a918efe`, three alternating repetitions per host/policy on Linux ARM64. Both policies pass 8,047,464 checks and all 23 JIT entry points pass in all twenty configurations. Values are **µs**, with native medians from the patched process. These runtime revisions precede the subsequent correctness-review fixes described in [jit/README.md](../jit/README.md); they are measurement checkpoints, not the final runtime recommendation.
-
-| Operation | Stock | Patched before | Patched ec20417 | blst | Patched/blst |
-|---|---:|---:|---:|---:|---:|
-| Fp multiply | 0.112 | 0.050 | 0.036 | 0.039 | 0.91x |
-| Fp square | 0.094 | 0.042 | 0.034 | 0.034 | 0.99x |
-| Fp2 multiply | 0.336 | 0.153 | 0.113 | 0.113 | 1.00x |
-| Fp2 square | 0.244 | 0.109 | 0.078 | 0.085 | 0.92x |
-| Fr mul+add | 0.058 | 0.029 | 0.021 | 0.024 | 0.88x |
-| Fp mul+add | 0.129 | 0.059 | 0.041 | 0.045 | 0.92x |
-| Fp inverse, same inputs | 3.493 | 3.064 | 2.904 | 2.857 | 1.02x |
-| Fp inverse, kernel | 3.343 | 2.946 | 2.799 | 2.855 | 0.98x |
-| Fp12 multiply | 6.034 | 2.992 | 2.139 | 2.156 | 0.99x |
-| Pairing check 2 | 2380.005 | 1167.972 | 821.095 | 853.603 | 0.96x |
-| G1 multiply | 196.989 | 100.259 | 69.404 | 89.043 | 0.78x |
-| G2 multiply | 369.356 | 174.549 | 126.537 | 183.158 | 0.69x |
-| G1 MSM 128 | 8083.327 | 4034.174 | 2864.050 | 3409.867 | 0.84x |
-| G2 MSM 128 | 14965.645 | 7326.774 | 5498.616 | 9167.597 | 0.60x |
-| map G1 | 116.794 | 58.226 | 43.918 | 44.798 | 0.98x |
-| map G2 | 445.423 | 211.078 | 155.095 | 160.471 | 0.97x |
-
-Isolating ARM64 square removes the caller's carry materialization. Four-limb Fr carry rows improve the mul+add loop. Loading Fp subtraction's modulus and reusing it for signed small-wide correction reduces subtraction to 43 instructions and difference-plus-REDC to 244. The square leaf has 302 instructions; the Fr loop entry has 204. All 171 common x64 library instruction listings remain identical to the original. Fp square, Fp2 multiply, the variable inverse, Fp12 multiply/square, maps and pairing still need stronger margins and repeated confirmation; a ratio near one is not a clear win.
-
-The next candidate reuses the existing signed 31-step update helper in the variable inverse, loads the full signed-wide correction constants, and fuses the imaginary Fp2 product subtraction with REDC. Its optional separate native reference library wraps the pinned assembly's raw product, REDC and subtract-plus-REDC without changing the public blst controls. Local differential checks cover Windows x64 and emulated ARM64; native Linux and Apple silicon measurements follow in the checkpoints below. Constant-time inversion remains outside the speed target and its paired experiment remains shelved.
-
-At this checkpoint, stock .NET 10/11 and patched x64 pass 8,137,792 checks under each policy. Fresh x64 captures with runtime `c318f5ac` match all 171 common audit methods and all 147 common regular benchmark/library methods against the original library/runtime; relocation addresses and process stack cookies are normalized, arithmetic constants are retained. The regular capture includes variable inversion, full wide reduction and Fp12 multiply/square. Three alternating x64 quick captures show Fp12 multiply/square and pairing medians within 1.1%; individual kernel-loop samples fluctuate substantially, including an Fp2-square median 12% higher despite identical library instructions. These noisy harness samples do not establish a timing regression or a speed claim. The exact instruction comparisons provide the x64 preservation evidence. `RUN_MACOS=true` is set for native Apple silicon validation, and Fp12 square/raw-product/reduction names are appended to the repeated filter. The native-wrapper workflow build hook awaits authorization under the pipeline ownership rule.
-
-### Fused Fp2 checkpoint on Linux and Apple silicon
-
-[Run 39365488563](https://github.com/flcl42/bls-net/actions/runs/39365488563) measures library `7f94ab9` and runtime `c318f5ac` with three alternating repetitions per host/policy. Linux uses a pinned core; the Apple M1 VM is unpinned and noisier. Both platforms pass 8,107,680 checks under each policy and all 25 JIT fixtures in every one of twenty Release/Checked stress/tiering configurations. The five-platform stock-runtime CI also passes. This runtime predates the further V3/V4/V5/V7 correctness fixes; these are historical measurements, and the current patch is required for general correctness.
-
-Times are **µs**. Each triplet is **stock .NET 11 / patched / blst**, with the native median from the patched process.
-
-| Operation | Linux stock / patched / blst | Patched/blst | Apple stock / patched / blst | Patched/blst |
-|---|---:|---:|---:|---:|
-| Fp multiply | 0.112 / 0.036 / 0.039 | 0.91x | 0.102 / 0.027 / 0.031 | 0.86x |
-| Fp square | 0.094 / 0.034 / 0.034 | 0.99x | 0.087 / 0.028 / 0.027 | 1.04x |
-| Fp2 multiply | 0.334 / 0.108 / 0.113 | 0.96x | 0.322 / 0.080 / 0.094 | 0.86x |
-| Fp2 square | 0.243 / 0.078 / 0.085 | 0.92x | 0.223 / 0.060 / 0.063 | 0.96x |
-| Fr mul+add | 0.059 / 0.021 / 0.024 | 0.88x | 0.061 / 0.021 / 0.024 | 0.89x |
-| Fp mul+add | 0.129 / 0.041 / 0.045 | 0.92x | 0.129 / 0.037 / 0.048 | 0.77x |
-| Fp inverse (variable, same inputs) | 3.480 / 2.827 / 2.857 | 0.99x | 2.572 / 1.904 / 2.948 | 0.65x |
-| Fp12 multiply | 6.030 / 2.145 / 2.157 | 0.99x | 5.186 / 1.670 / 1.819 | 0.92x |
-| Fp12 square | 4.413 / 1.532 / 1.543 | 0.99x | 3.825 / 1.218 / 1.235 | 0.99x |
-| Pairing check 2 | 2377.722 / 818.457 / 853.399 | 0.96x | 2103.100 / 645.875 / 741.454 | 0.87x |
-| G1 multiply | 197.028 / 69.292 / 89.114 | 0.78x | 180.750 / 54.875 / 79.125 | 0.69x |
-| G2 multiply | 368.145 / 123.872 / 183.341 | 0.68x | 328.042 / 93.291 / 147.583 | 0.63x |
-| G1 MSM 128 | 8084.695 / 2865.264 / 3410.600 | 0.84x | 7451.375 / 2346.791 / 2761.000 | 0.85x |
-| G2 MSM 128 | 14890.741 / 5339.568 / 9167.165 | 0.58x | 13429.375 / 4159.667 / 7422.500 | 0.56x |
-| map G1 | 116.808 / 43.926 / 44.781 | 0.98x | 112.041 / 36.625 / 39.291 | 0.93x |
-| map G2 | 444.484 / 153.006 / 160.550 | 0.95x | 405.292 / 121.500 / 132.125 | 0.92x |
-
-Fp2 multiplication improves from parity to 0.96x blst on Linux. The same-input variable inverse, Fp square and Fp12 multiply/square remain too close to parity for a clear-win claim. Apple silicon confirms most gains, but its Fp square is 1.04x blst. Raw product and reduction samples are now repeated; native columns remain unavailable until the optional reference-library build hook is authorized. The original public blst controls remain unchanged.
-
-The next candidate uses whole cross-product carry rows in square, keeps the wide Karatsuba sum in registers, uses disjoint raw products in the tower, and unrolls the regular inverse's modular coefficient update. Local source tests pass 8,348,548 checks under both policies on stock .NET 10/11 and patched x64. Fresh captures retain identical instructions for all 171 common x64 audit methods and all 147 common regular-operation methods. The paired constant-time inversion experiment remains shelved. Native results for these changes and the review fixes follow below.
-
-### Reviewed-runtime square and inverse checkpoint
-
-[Run 39373909410](https://github.com/flcl42/bls-net/actions/runs/39373909410) measures library `b6d4827` and runtime `00403488`, with three alternating repetitions on Linux Neoverse N2 and Apple silicon. Both platforms pass **8,318,436 native checks per policy**, **8,007,920 managed-only checks per policy**, and **28 JIT fixtures in all twenty configurations**. The five-platform stock-runtime CI passes. The independent reviewer reports no open wrong-code findings at this runtime revision and independently passes 4.32 million generated ARM64 calls under emulation.
-
-Times are **µs**, and each triplet is **stock / patched / blst**. The native median comes from the patched process. These are expanded-policy measurements, which is the default on ARM64.
-
-| Operation | Linux stock / patched / blst | Patched/blst | Apple stock / patched / blst | Patched/blst |
-|---|---:|---:|---:|---:|
-| Fp multiply | 0.112 / 0.036 / 0.039 | 0.91x | 0.114 / 0.028 / 0.033 | 0.85x |
-| Fp square | 0.100 / 0.033 / 0.034 | 0.96x | 0.097 / 0.027 / 0.028 | 0.98x |
-| Fp2 multiply | 0.334 / 0.108 / 0.113 | 0.96x | 0.303 / 0.087 / 0.094 | 0.93x |
-| Fp2 square | 0.244 / 0.078 / 0.085 | 0.92x | 0.238 / 0.062 / 0.073 | 0.85x |
-| Fr mul+add | 0.059 / 0.021 / 0.024 | 0.88x | 0.063 / 0.021 / 0.024 | 0.86x |
-| Fp mul+add | 0.130 / 0.041 / 0.045 | 0.92x | 0.125 / 0.037 / 0.048 | 0.78x |
-| Fp inverse (variable, same inputs) | 3.300 / 2.639 / 2.856 | 0.92x | 2.539 / 1.760 / 2.969 | 0.59x |
-| Fp12 multiply | 6.005 / 2.100 / 2.157 | 0.97x | 5.306 / 1.598 / 1.780 | 0.90x |
-| Fp12 square | 4.395 / 1.495 / 1.544 | 0.97x | 3.823 / 1.171 / 1.240 | 0.94x |
-| Pairing check 2 | 2370.969 / 807.887 / 853.662 | 0.95x | 2289.162 / 653.263 / 714.237 | 0.91x |
-| G1 multiply | 201.272 / 68.426 / 89.323 | 0.77x | 184.791 / 54.250 / 79.167 | 0.69x |
-| G2 multiply | 367.846 / 123.396 / 183.175 | 0.67x | 334.583 / 94.667 / 150.417 | 0.63x |
-| G1 MSM 128 | 8158.411 / 2853.294 / 3409.203 | 0.84x | 7462.084 / 2396.000 / 2760.416 | 0.87x |
-| G2 MSM 128 | 14883.574 / 5328.110 / 9166.586 | 0.58x | 14093.084 / 4252.041 / 7469.958 | 0.57x |
-| map G1 | 118.421 / 43.633 / 44.762 | 0.97x | 112.667 / 36.417 / 39.375 | 0.92x |
-| map G2 | 444.497 / 152.870 / 160.542 | 0.95x | 419.416 / 121.791 / 132.583 | 0.92x |
-
-Variable inversion now has a clear Linux margin at 0.92x blst, and square improves to 0.96x. Fp12 multiply/square reach 0.97x; pairing reaches 0.95x. Linux map G1 and Fp12 margins remain narrow and need independent repetitions. Apple square is 0.98x, with more timing variation on its unpinned VM. Explicit compact-policy overrides remain slower for some operations (Linux Fp2 multiply 1.11x, Fp12 multiply/square 1.04x/1.05x, map G2 1.02x); they are correctness-tested, and these measurements do not claim compact-policy parity. Raw-product and reduction native comparisons still await the optional reference build hook.
-
-The next map candidate shares the improved cross-product square core, retains lazy outputs below 2p, and isolates its arithmetic leaf from the public-count loop. Its local listing takes 285 instructions per square iteration including calls/loop, versus 358 previously (353 on the final old iteration). The new leaf has 276 branch-free instructions; canonical square retains 292. Emulated extracted ARM64 code passes 8,036 exact-output checks, including inputs approaching 2p, overlapping output and both incoming carry states. A second candidate keeps Fp4 squares wide until four final reductions instead of six CIOS reductions; its private biased-real formula has the proven bound |x|<8p²<pR. It targets cyclotomic square (986.84ns versus blst 940.31ns in the previous quick sweep) and final exponentiation. Both candidates pass 8,353,308 checks per policy on patched x64 and stock .NET 10/11. Captures retain identical instructions for 171 common x64 audit methods and 154 common regular methods, including cyclotomic square and final exponentiation. The local ARM64 inventory covers 160 reachable methods, with no variable-latency candidates; both new arithmetic leaves are branch-free, and square-run branches depend only on the public count. The expanded repeated filter now also covers the remaining regular tower/pairing/curve operations. The following checkpoints measure these changes.
-
-### Fused coordinates and signed reductions
-
-[Run 39394780548](https://github.com/flcl42/bls-net/actions/runs/39394780548) measures library `4249de6` and runtime `a0c28efc`: all 31 JIT fixtures pass in all **24 Release/Checked configurations**, now including JitStress=1, on Linux ARM64 and Apple silicon. Both policies pass 8,388,412 native checks and 8,072,896 managed-only checks per platform. Five-platform stock .NET 10/11 CI also passes. With three alternating captures per host/policy, fused 3t±2a coordinate updates move Linux cyclotomic square from **950 to 936 ns** versus blst **943 ns** (0.993x), and Apple silicon from **749 to 724 ns** versus **752 ns** (0.962x). Linux pairing check 2 moves from 799.735 to 795.714 µs versus 852.936 µs; Apple measures 625.317 versus 695.842 µs. Other Linux field medians remain effectively unchanged. Apple raw times vary more, so compare same-process native ratios. The Linux cyclotomic lead remains too small to claim a clear margin from this run alone.
-
-The next coordinate checkpoint pins runtime `5f087d70`, which strengthens the containment regression without changing generated runtime code. Its subtract update uses the tighter (−2p,3p) bound to reuse 2p limbs, reducing the Fp2 helper from 221 to 191 local ARM64 instructions. Finishing the independent first coordinate pair earlier reduces the cyclotomic wrapper from 103 to 99 instructions; output/input aliases still pass. Local suites pass 8,418,524 checks per policy on patched x64 and stock .NET 10/11. Fresh x64 captures retain all 171 common library instruction listings and both mul+add loops (243/242 instructions). Eight alternating captures give Fr mul+add 11.100→10.995 ns and Fp mul+add 19.910→19.915 ns. The ARM64 audit inventories 162 methods with no variable-latency candidates. Native raw-product/reduction leaf imports now suppress the GC transition; the next pipeline builds those optional exports from the pinned blst archive and captures the constant-time witness on the native ARM64 CLR. [Run 39398839856](https://github.com/flcl42/bls-net/actions/runs/39398839856), library `6369b5e`, passes all 31 fixtures in all 24 configurations and both full library policies on each platform. Linux cyclotomic square reaches **927.97 ns versus 942.50 ns** (0.985x), final exponentiation 339.554 versus 379.605 µs (0.895x), and pairing check 2 792.866 versus 853.933 µs (0.929x). Apple silicon measures cyclotomic square **716.08 versus 751.67 ns** (0.953x) and pairing check 2 617.650 versus 688.133 µs (0.898x). Native constant-time inventories cover 171 methods per platform, with 13 unresolved/runtime callees and no variable-latency candidates. Both policies pass 8,418,524 native checks and 8,072,896 managed-only checks per platform; five-platform stock CI is green.
-
-The native reference hook exposes remaining signed-reducer gaps on Linux: general ReduceWide is 29.29 ns versus a 23.38 ns positive REDC, and ReduceWideSmall is 24.12 versus 23.39 ns. Positive reduction is 23.08 versus 23.38 ns; difference reduction is 26.07 versus 30.89 ns. These wrappers compare identical measured inputs, while the managed signed APIs retain broader input contracts. The next candidate preserves those contracts: the full signed reducer, used only by variable-time Fp6/Fp12 formulas, tests strict quotient high-word bounds before its general correction; the secret small reducer normalizes a negative input by adding pR to its high half before the multiply rows. This moves a carry dependency away from the final quotient without adding a secret-dependent branch. Local suites pass 8,448,686 checks per policy on patched x64 and stock .NET 10/11, including exact high-word equality cases and aliases; all 171 common x64 listings remain unchanged. The new small leaf has 216 branch-free local ARM64 instructions. [Run 39404089742](https://github.com/flcl42/bls-net/actions/runs/39404089742), library `3b89478`, confirms the variable general-reduction shortcut: Linux moves from 29.29 to **22.35 ns versus 23.40 ns** (0.955x), and Apple silicon from 22.21 to **17.13 versus 19.39 ns** (0.883x). Linux Fp12 multiply reaches 2.011 versus 2.161 microseconds (0.931x), and pairing check 2 reaches 786.905 versus 853.840 microseconds (0.922x). However, putting small-input normalization before every row regresses Linux ReduceWideSmall from **24.12 to 24.87 ns**, versus blst 23.39 ns; that schedule is superseded. Apple small reduction remains ahead at 19.23 versus 21.22 ns. Apple square varies to 26.91 versus 26.58 ns in this run despite the same 291-instruction leaf as the earlier faster capture, so its margin needs an unchanged-source repeat. Both platforms pass all 31 fixtures in all 24 configurations, 8,448,686 native checks per policy and the managed-only suites. Native constant-time inventories cover 172 methods with no variable-latency candidates, and five-platform stock CI is green.
-
-The next small-reducer schedule moves normalization between the third and fourth unrolled rows: local codegen confirms 36 of 72 widening-product instructions now precede it, rather than zero. The leaf remains 216 instructions and branch-free. All six local suites pass 8,448,686 checks and all 171 common x64 listings remain identical. [Run 39408937102](https://github.com/flcl42/bls-net/actions/runs/39408937102), library `f494afd`, improves Linux ReduceWideSmall to 24.37 ns, but it remains above blst's 23.38 ns (1.042x); this schedule is also superseded. General reduction stays at 22.36 versus 23.39 ns (0.956x). Linux pairing check 2 measures 785.517 versus 853.737 microseconds. Apple small reduction measures 18.63 versus 19.54 ns, and its unchanged square leaf moves to 25.01 versus 29.04 ns; the prior near-parity result reflects substantial VM timing variation. Both platforms pass all 31 JIT fixtures in all 24 configurations and both full library policies; stock five-platform CI is green.
-
-The independent-candidate correction forms q+p and q-p as separate chains. Its local ARM64 leaf has 213 branch-free instructions and no spill frame, but [run 39413700312](https://github.com/flcl42/bls-net/actions/runs/39413700312), library `b097cea`, rejects it on Linux: **24.81 ns versus blst 23.40 ns** (1.060x). Apple measures 20.21 versus 21.10 ns (0.958x). All other measured regular rows remain below blst on Linux, including general reduction at 22.36/23.39 ns, Fp12 multiply at 2.009/2.157 microseconds, and pairing check 2 at 788.280/853.870 microseconds. Both native platforms pass all 31 fixtures in all 24 configurations and both full library policies; the native constant-time inventories cover 172 methods with no variable-latency candidates. Five-platform stock CI is green.
-
-[Run 39417944867](https://github.com/flcl42/bls-net/actions/runs/39417944867), library `d6f0b7e` and runtime `5f087d70`, compares four further schedules in the same managed hardware run. On Linux, the earlier production correction is best at **24.12/23.38 ns** (managed/blst); row-six normalization is 24.27/23.39, row-five normalization 24.43/23.38, hoisted row-six normalization 25.07/23.40, and the hoisted signed correction 24.54/23.39. Each experimental leaf is branch-free and passes the full signed and alias checks. Both platforms pass all 31 fixtures in all 24 configurations, both policies pass 8,568,770 native checks and 8,223,142 managed-only checks, and five-platform CI is green. The experiments are removed. Production retains the earlier branch-free correction; this internal helper remains about 1.03x blst on Linux and is outside the final user-facing regular-operation speed target.
-
-The final production checkpoint removes all temporary comparison kernels, benchmark rows and audit calls. It retains the optional native raw-kernel references and direct BigInteger checks over signed small inputs with low/high output overlaps. All six local suites pass 8,478,707 checks on patched x64 and stock .NET 10/11 under both policies; all 171 common x64 library instruction listings are identical. Two separate final-source hardware runs with RUN_MACOS=true will establish the final table against the ARM64 baseline at runtime 74ed6106.
+| Native arithmetic leaf | Linux instructions | Apple silicon instructions | Conditional branches |
+|---|---:|---:|---:|
+| Fp multiply | 347 | 346 | 0 |
+| Fp square | 292 | 291 | 0 |
+| Disjoint wide product | 165 | 165 | 0 |
+| Alias-preserving wide product | 166 | 166 | 0 |
+| Positive REDC | 200 | 199 | 0 |
+| Small signed REDC | 213 | 212 | 0 |
 
 ### ARM64 generated code
 
-Local Windows-ABI ARM64 AltJit captures compare the original library/runtime with the ARM64 kernels and runtime `00403488`. Counts include fixed loop repetitions, managed/native wrappers and symbolically resolved arithmetic callees. blst counts use its generated ELF ARMv8 assembly, including bare returns; ABI and scheduling differences remain. The dedicated inverse row counts one loop step, not a complete batch or inversion.
+Local Windows-ABI AltJit captures compare the original library/runtime with the retained ARM64 kernels. Counts include fixed loop repetitions, wrappers and symbolically resolved arithmetic callees. blst counts use generated ELF ARMv8 assembly including bare returns, so ABI and scheduling differences remain. The inverse row counts one step rather than a complete inversion. Runtime 5f087d70 retains the ARM64 lowering of 00403488; subsequent runtime changes fix base x64 assertions and strengthen regressions.
 
-| Kernel | Original managed, runtime 74ed6106 | ARM64 candidate | blst ARM64 |
+| Kernel | Original managed, runtime 74ed6106 | Retained ARM64 kernels | blst ARM64 |
 |---|---:|---:|---:|
 | Fp multiply | 567 | 356 | 370 |
 | Fp square | 458 | 292 | 313 |
@@ -273,28 +141,13 @@ Local Windows-ABI ARM64 AltJit captures compare the original library/runtime wit
 | Fp subtract | 93 | 43 | 44 |
 | Inverse inner step | 34 | 18 | 27 |
 
-Fp multiply's isolated arithmetic leaf is 347 branch-free instructions; its managed entry adds nine. The raw product and wide reducer are also branch-free. Fp2 multiplication totals 93 wrapper instructions, three 165-instruction products, 244 for the real difference/reduction and 253 for the fused imaginary reduction. The inverse uses three CSELs and only its public backedge per step. Managed retains 31-bit batches; blst ARM64 uses 62-bit batches. [JIT reproduction](../jit/README.md#arm64-carry-and-row-follow-up) describes the private-host CoreLib preparation needed for accurate widening-product imports.
+Fp multiply's leaf has 347 branch-free instructions; its entry adds nine. Fp2 multiplication totals 93 wrapper instructions, three 165-instruction products, 244 for the real difference/reduction and 253 for the fused imaginary reduction. The inverse uses three CSELs with only its public backedge per step; managed retains 31-bit batches while blst ARM64 uses 62-bit batches. Fused cyclotomic updates use 3t±2a and shared 2p correction limbs; the subtract helper shrinks from 221 to 191 local instructions and its wrapper from 103 to 99. Fp4 square uses wide accumulation with four reductions instead of six. [JIT reproduction](../jit/README.md#arm64-carry-and-row-follow-up) describes the private-host CoreLib preparation needed for widening-product imports.
 
-The ARM64 audit inventory covers 156 reachable methods and reports no variable-latency candidates. It retains unresolved helpers requiring native ARM64 closure. Reviewed field-kernel branches are absent; inversion branches count fixed batches/steps or clear a public stack-frame range. The capture is generated-code review, not hardware execution.
+### x64 regression check
 
-### x64 regression check for the ARM64 candidate
+All **171 common x64 library instruction listings** are identical to the 74ed6106 baseline. Dependent Fr/Fp mul+add loops also retain their 243/242 instructions. Eight alternating captures without disassembly give Fr mul+add **11.100 → 10.995 ns** and Fp mul+add **19.910 → 19.915 ns**; these complement the unchanged listings and show no repeatable slowdown. ARM64 feature checks fold away on x64. All six final local suites pass **8,478,707 checks each**: compact/expanded on the private patched x64 host and stock .NET 10/11. The complete local 31-fixture Checked matrix includes tiering 0/1, default, JitStress=1/2, register stress 1/3/8 and forced REVERSE_FLAG/SPLIT_TREES_REMOVE_COMMAS; Release also passes.
 
-All 171 common x64 library instruction listings match the original binary with the baseline JIT. Three alternating baseline/candidate expanded-policy `--quick` captures use private patched hosts, Major roll-forward, ReadyToRun/tiering disabled and processor 3. Medians below complement that exact instruction comparison; changes under 0.6% are within the harness's shared-VM noise.
-
-| Operation | Before | After |
-|---|---:|---:|
-| Fp multiply, ns | 18.620 | 18.560 |
-| Fp square, ns | 16.960 | 16.910 |
-| Fp2 multiply, ns | 59.110 | 59.160 |
-| Fp2 square, ns | 40.360 | 40.180 |
-| Fr mul+add, ns | 10.850 | 10.790 |
-| Fp mul+add, ns | 19.640 | 19.640 |
-| CT Fp inverse, µs | 1.663 | 1.660 |
-| Pairing check 2, µs | 423.860 | 424.320 |
-| G1 MSM 128, µs | 1513.200 | 1504.900 |
-| G2 MSM 128, µs | 2868.600 | 2864.700 |
-
-The initial candidate's full native-comparison suite passes **7,896,012 checks per run** under both policies on stock .NET 10.0.12, stock .NET 11 RC1 and the private patched .NET 12 host. The alias-preserving extension passes **7,936,156 checks** on the patched host, including both input halves overlapping the output. The 23 JIT regressions also pass with the Release JIT and all ten Checked stress/tiering configurations. The two new fixtures compile successfully through the ARM64 Checked AltJit; their executed fallback checks are x64 checks.
+Both x64 Checked assertions fixed in a0c28efc originate in the #134039 base **0a303c9**, before b65241d/74ed6106: stale register-optional operands during carry-loop containment, and peepholes starting at the function's final group during earlier prolog emission. An exact base-source Checked JIT reproduces both in normal managed tests; current sources pass. The original handoff's alleged new ARM64 paired-flags failure was captured with the older c318f5ac JIT, not 00403488. Existing pairing guards already fix it; deterministic managed regressions now confirm that on both native CLRs. No new wrong-code finding remains open.
 
 ## EIP-2537 precompiles
 
