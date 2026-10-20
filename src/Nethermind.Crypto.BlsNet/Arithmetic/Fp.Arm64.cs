@@ -70,6 +70,18 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     internal static void SquareArm64(out Fp result, in Fp value)
     {
+        SquareLazyCoreArm64(out Fp quotient, value);
+        ReduceArm64(out result, quotient._l0, quotient._l1, quotient._l2, quotient._l3, quotient._l4, quotient._l5);
+    }
+
+    // Inputs below 2p give a^2 < 4p^2 < pR and a quotient below 2p.
+    // This bound is preserved across a public-count square run.
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void SquareLazyArm64(out Fp result, in Fp value) => SquareLazyCoreArm64(out result, value);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void SquareLazyCoreArm64(out Fp result, in Fp value)
+    {
         ulong a0 = value._l0, a1 = value._l1, a2 = value._l2;
         ulong a3 = value._l3, a4 = value._l4, a5 = value._l5;
         ulong r0, r1 = 0, r2 = 0, r3 = 0, r4 = 0, r5 = 0;
@@ -116,10 +128,8 @@ public readonly partial struct Fp
             L0 = r0, L1 = r1, L2 = r2, L3 = r3, L4 = r4, L5 = r5,
             L6 = r6, L7 = r7, L8 = r8, L9 = r9, L10 = r10, L11 = r11,
         };
-        // Canonical inputs give a^2 < p^2 < pR and a quotient below 2p.
         // Output is delayed until every input limb has been consumed.
-        ReduceWideCoreArm64(out Fp quotient, wide);
-        ReduceArm64(out result, quotient._l0, quotient._l1, quotient._l2, quotient._l3, quotient._l4, quotient._l5);
+        ReduceWideCoreArm64(out result, wide);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

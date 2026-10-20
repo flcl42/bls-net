@@ -113,6 +113,11 @@ public struct Fp12 : IEquatable<Fp12>
     [SkipLocalsInit]
     private static void SquareFp4(out Fp4 result, in Fp2 a0, in Fp2 a1)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            SquareFp4Arm64(out result.C0, out result.C1, a0, a1);
+            return;
+        }
         Unsafe.SkipInit(out Fp4 ret);
         Unsafe.SkipInit(out Fp2 t0);
         Unsafe.SkipInit(out Fp2 t1);
@@ -124,6 +129,40 @@ public struct Fp12 : IEquatable<Fp12>
         Fp2.Square(out ret.C1, ret.C1);
         Fp2Fused.SubtractSum(out ret.C1, ret.C1, t0, t1);
         result = ret;
+    }
+
+    // Canonical Fp2 inputs. Each wide square has real in [0,4p^2) and
+    // imaginary in [0,2p^2). C0=a0^2+(1+u)*a1^2 has components in
+    // (-2p^2,8p^2) and [0,8p^2). C1=(a0+a1)^2-a0^2-a1^2 has
+    // real in (-8p^2,4p^2), imaginary in (-4p^2,2p^2).
+    // Since 8p^2<pR, four bounded reductions replace six CIOS reductions.
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void SquareFp4Arm64(out Fp2 c0, out Fp2 c1, in Fp2 a0, in Fp2 a1)
+    {
+        SquareWideFp4Arm64(out Fp2Wide t0, a0);
+        SquareWideFp4Arm64(out Fp2Wide t1, a1);
+        Fp2.Add(out Fp2 sum, a0, a1);
+        SquareWideFp4Arm64(out Fp2Wide t2, sum);
+        WideTower.NonResidue2(out Fp2Wide real, t1);
+        WideTower.Add2(out real, real, t0);
+        WideTower.Subtract2(out t2, t2, t0);
+        WideTower.Subtract2(out t2, t2, t1);
+        Fp.ReduceWideSmall(out c0.C0, real.C0);
+        Fp.ReduceWidePositive(out c0.C1, real.C1);
+        WideTower.Reduce2Small(out c1, t2);
+    }
+
+    // Private to the Fp4 formula above; its larger biased-real bound must
+    // not replace SquareWide in formulas proved for real <2p^2.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void SquareWideFp4Arm64(out Fp2Wide result, in Fp2 value)
+    {
+        Fp.AddUnreduced(out Fp sum, value.C0, value.C1);
+        Fp.SubtractBiased(out Fp difference, value.C0, value.C1);
+        Fp.MultiplyWideNoAlias(out result.C0, sum, difference);
+        Fp.MultiplyWideNoAlias(out result.C1, value.C0, value.C1);
+        Fp.AddWideInline(out result.C1, result.C1, result.C1);
     }
 
     // Karabina, ePrint 2010/542, Theorems 3.1 and 3.2. The two omitted

@@ -21,10 +21,13 @@ internal static class ConstantTimeAudit
     private static void Exercise(Fp a, Fp2 b, Fr fr, byte[] scalar, G1Projective p, G2Projective q)
     {
         ulong mask = Fp.IsZeroMask(a);
+        Fp12.SquareFp4Arm64(out Fp2 fp4Real, out Fp2 fp4Imaginary, b, b);
+        mask ^= Fp2.EqualMask(fp4Real, fp4Imaginary);
         Fr secret = Fr.FromLittleEndianConstantTime(scalar); secret.ToLittleEndianConstantTime(scalar);
         Fp.Add(out Fp ar, a, a); Fp.Subtract(out ar, ar, a);
         Fp.Negate(out ar, ar); Fp.Multiply(out ar, ar, a); Fp.Square(out ar, ar);
         Fp.SquareArm64(out ar, ar);
+        Fp.SquareNThenMultiplyArm64(out ar, ar, 12, a);
         // Exercise the isolated ARM64 leaf on the x64 AltJit host as well.
         // Its portable high-half fallback is checked by the kernel tests.
         Fp.MultiplyArm64(out ar, ar, a);

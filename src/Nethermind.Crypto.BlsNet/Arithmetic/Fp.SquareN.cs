@@ -10,6 +10,11 @@ public readonly partial struct Fp
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
     internal static void SquareNThenMultiply(out Fp result, in Fp value, int count, in Fp factor)
     {
+        if (System.Runtime.Intrinsics.Arm.ArmBase.Arm64.IsSupported)
+        {
+            SquareNThenMultiplyArm64(out result, value, count, factor);
+            return;
+        }
         ulong a0 = value._l0, a1 = value._l1, a2 = value._l2;
         ulong a3 = value._l3, a4 = value._l4, a5 = value._l5;
         ref ulong modulus = ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(ModulusLimbs);
@@ -103,6 +108,15 @@ public readonly partial struct Fp
             a5 = AddCarry(r5, r11, ref highCarry);
         }
         Fp power = new Fp(a0, a1, a2, a3, a4, a5);
+        Multiply(out result, power, factor);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void SquareNThenMultiplyArm64(out Fp result, in Fp value, int count, in Fp factor)
+    {
+        Fp power = value;
+        for (int i = 0; i < count; i++) SquareLazyArm64(out power, power);
         Multiply(out result, power, factor);
     }
 

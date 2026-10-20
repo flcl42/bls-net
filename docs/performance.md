@@ -211,6 +211,35 @@ Fp2 multiplication improves from parity to 0.96x blst on Linux. The same-input v
 
 The next candidate uses whole cross-product carry rows in square, keeps the wide Karatsuba sum in registers, uses disjoint raw products in the tower, and unrolls the regular inverse's modular coefficient update. Local source tests pass 8,348,548 checks under both policies on stock .NET 10/11 and patched x64. Fresh captures retain identical instructions for all 171 common x64 audit methods and all 147 common regular-operation methods. The paired constant-time inversion experiment remains shelved. Native hardware results for this next candidate and the latest review fixes are pending.
 
+### Reviewed-runtime square and inverse checkpoint
+
+[Run 39373909410](https://github.com/flcl42/bls-net/actions/runs/39373909410) measures library `b6d4827` and runtime `00403488`, with three alternating repetitions on Linux Neoverse N2 and Apple silicon. Both platforms pass **8,318,436 native checks per policy**, **8,007,920 managed-only checks per policy**, and **28 JIT fixtures in all twenty configurations**. The five-platform stock-runtime CI passes. The independent reviewer reports no open wrong-code findings at this runtime revision and independently passes 4.32 million generated ARM64 calls under emulation.
+
+Times are **µs**, and each triplet is **stock / patched / blst**. The native median comes from the patched process. These are expanded-policy measurements, which is the default on ARM64.
+
+| Operation | Linux stock / patched / blst | Patched/blst | Apple stock / patched / blst | Patched/blst |
+|---|---:|---:|---:|---:|
+| Fp multiply | 0.112 / 0.036 / 0.039 | 0.91x | 0.114 / 0.028 / 0.033 | 0.85x |
+| Fp square | 0.100 / 0.033 / 0.034 | 0.96x | 0.097 / 0.027 / 0.028 | 0.98x |
+| Fp2 multiply | 0.334 / 0.108 / 0.113 | 0.96x | 0.303 / 0.087 / 0.094 | 0.93x |
+| Fp2 square | 0.244 / 0.078 / 0.085 | 0.92x | 0.238 / 0.062 / 0.073 | 0.85x |
+| Fr mul+add | 0.059 / 0.021 / 0.024 | 0.88x | 0.063 / 0.021 / 0.024 | 0.86x |
+| Fp mul+add | 0.130 / 0.041 / 0.045 | 0.92x | 0.125 / 0.037 / 0.048 | 0.78x |
+| Fp inverse (variable, same inputs) | 3.300 / 2.639 / 2.856 | 0.92x | 2.539 / 1.760 / 2.969 | 0.59x |
+| Fp12 multiply | 6.005 / 2.100 / 2.157 | 0.97x | 5.306 / 1.598 / 1.780 | 0.90x |
+| Fp12 square | 4.395 / 1.495 / 1.544 | 0.97x | 3.823 / 1.171 / 1.240 | 0.94x |
+| Pairing check 2 | 2370.969 / 807.887 / 853.662 | 0.95x | 2289.162 / 653.263 / 714.237 | 0.91x |
+| G1 multiply | 201.272 / 68.426 / 89.323 | 0.77x | 184.791 / 54.250 / 79.167 | 0.69x |
+| G2 multiply | 367.846 / 123.396 / 183.175 | 0.67x | 334.583 / 94.667 / 150.417 | 0.63x |
+| G1 MSM 128 | 8158.411 / 2853.294 / 3409.203 | 0.84x | 7462.084 / 2396.000 / 2760.416 | 0.87x |
+| G2 MSM 128 | 14883.574 / 5328.110 / 9166.586 | 0.58x | 14093.084 / 4252.041 / 7469.958 | 0.57x |
+| map G1 | 118.421 / 43.633 / 44.762 | 0.97x | 112.667 / 36.417 / 39.375 | 0.92x |
+| map G2 | 444.497 / 152.870 / 160.542 | 0.95x | 419.416 / 121.791 / 132.583 | 0.92x |
+
+Variable inversion now has a clear Linux margin at 0.92x blst, and square improves to 0.96x. Fp12 multiply/square reach 0.97x; pairing reaches 0.95x. Linux map G1 and Fp12 margins remain narrow and need independent repetitions. Apple square is 0.98x, with more timing variation on its unpinned VM. Explicit compact-policy overrides remain slower for some operations (Linux Fp2 multiply 1.11x, Fp12 multiply/square 1.04x/1.05x, map G2 1.02x); they are correctness-tested, and these measurements do not claim compact-policy parity. Raw-product and reduction native comparisons still await the optional reference build hook.
+
+The next map candidate shares the improved cross-product square core, retains lazy outputs below 2p, and isolates its arithmetic leaf from the public-count loop. Its local listing takes 285 instructions per square iteration including calls/loop, versus 358 previously (353 on the final old iteration). The new leaf has 276 branch-free instructions; canonical square retains 292. Emulated extracted ARM64 code passes 8,036 exact-output checks, including inputs approaching 2p, overlapping output and both incoming carry states. A second candidate keeps Fp4 squares wide until four final reductions instead of six CIOS reductions; its private biased-real formula has the proven bound |x|<8p²<pR. It targets cyclotomic square (986.84ns versus blst 940.31ns in the previous quick sweep) and final exponentiation. Both candidates pass 8,353,308 checks per policy on patched x64 and stock .NET 10/11. Captures retain identical instructions for 171 common x64 audit methods and 154 common regular methods, including cyclotomic square and final exponentiation. The local ARM64 inventory covers 160 reachable methods, with no variable-latency candidates; both new arithmetic leaves are branch-free, and square-run branches depend only on the public count. The expanded repeated filter now also covers the remaining regular tower/pairing/curve operations. Hardware timing is pending.
+
 ### ARM64 generated code
 
 Local Windows-ABI ARM64 AltJit captures compare the original library/runtime with the ARM64 kernels and runtime `00403488`. Counts include fixed loop repetitions, managed/native wrappers and symbolically resolved arithmetic callees. blst counts use its generated ELF ARMv8 assembly, including bare returns; ABI and scheduling differences remain. The dedicated inverse row counts one loop step, not a complete batch or inversion.
