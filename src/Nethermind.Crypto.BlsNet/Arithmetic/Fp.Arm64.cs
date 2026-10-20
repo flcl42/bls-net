@@ -399,8 +399,8 @@ public readonly partial struct Fp
         ReduceWideCorrectArm64(out result, quotient);
     }
 
-    // Preserve the earlier branch-free signed correction while the independent
-    // scheduling candidates are measured by the managed benchmark harness.
+    // |value|<pR gives a quotient in (-p,2p). Retain the measured
+    // branch-free sign correction followed by the final p subtraction.
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void ReduceWideSmallArm64(out Fp result, in FpWide value)

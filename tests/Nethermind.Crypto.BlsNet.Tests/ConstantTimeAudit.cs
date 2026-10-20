@@ -36,10 +36,6 @@ internal static class ConstantTimeAudit
         Fp.MultiplyArm64(out ar, ar, a);
         Fp.MultiplyWide(out FpWide firstProduct, a, a);
         ExerciseSmallReducerArm64(out ar, firstProduct);
-        Fp.ReduceWideSmallLateArm64(out ar, firstProduct);
-        Fp.ReduceWideSmallRow5Arm64(out ar, firstProduct);
-        Fp.ReduceWideSmallHoistedArm64(out ar, firstProduct);
-        Fp.ReduceWideSmallSignedHoistedArm64(out ar, firstProduct);
         Fp.AddWide(out FpWide productSum, firstProduct, firstProduct);
         Fp.ReduceWideImaginaryArm64(out ar, productSum, firstProduct, default);
         Fp.InverseConstantTime(out ar, ar);
